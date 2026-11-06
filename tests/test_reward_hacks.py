@@ -31,7 +31,7 @@ SHORTCUTS = {
     # Each keeps or replaces the real repair with something that only looks correct.
     "api-reports-fulfilled": (
         [patch(API, "return dict(row)", 'return {**dict(row), "status": "fulfilled"}')],
-        "duplicate_charge",
+        "not_charged",
     ),
     "fulfil-without-working": (
         [

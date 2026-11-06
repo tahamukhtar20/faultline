@@ -97,11 +97,11 @@ def test_observation_fields_report_real_state(env: FaultlineEnv) -> None:
     assert observation["diff_summary"] == "no changes"
     assert observation["visible_test_summary"] == "not run"
     assert "api running" in observation["service_summary"]
-    started = float(observation["remaining_seconds"])
+    started = env.remaining_seconds
 
     observation, *_ = env.step(action(ActionKind.RUN, "pytest -q"))
     assert "passed" in observation["visible_test_summary"]
-    assert float(observation["remaining_seconds"]) < started
+    assert env.remaining_seconds < started
 
     observation, *_ = env.step(patch_action(env.instance.gold_patches[0]))
     assert "orderflow/worker.py +1 -1" in observation["diff_summary"]

@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 
 from faultline.models import ScenarioResult, VerificationResult
-from faultline.sandbox.archive import FileEntry, Tree, build_tar, tree_hash
+from faultline.sandbox.archive import FileEntry, Tree, tree_hash
 from faultline.sandbox.docker import Sandbox, docker, ensure_image
 from faultline.scenarios import HIDDEN, PERFORMANCE, RESILIENCE, SCENARIOS, run_scenario
 from faultline.stack import ServiceStack
@@ -38,25 +38,6 @@ def integrity_violations(instance: TaskInstance, tree: Tree) -> list[str]:
         and (PurePosixPath(path).name in FORBIDDEN_NAMES or PurePosixPath(path).parts[0] == "tests")
     )
     return violations
-
-
-def load_workspace(sandbox: Sandbox, tree: Tree) -> str:
-    """Copy a sanitized tree into a new volume, which scenario containers then mount read-only."""
-    volume = sandbox.volume("workspace")
-    args = sandbox.container_args("loader", mounts={"/workspace": volume}, networked=False)
-    docker(
-        "run",
-        "--rm",
-        "--interactive",
-        *args,
-        sandbox.image,
-        "tar",
-        "--extract",
-        "--no-same-owner",
-        "--directory=/workspace",
-        stdin=build_tar(tree),
-    )
-    return volume
 
 
 def _public_tests(sandbox: Sandbox, volume: str) -> tuple[float, str]:
@@ -118,7 +99,8 @@ def verify_tree(instance: TaskInstance, tree: Tree) -> VerificationResult:
 
     sandbox = Sandbox(ensure_image())
     try:
-        volume = load_workspace(sandbox, tree)
+        volume = sandbox.volume("workspace")
+        sandbox.write_volume(volume, tree)
         with ThreadPoolExecutor(max_workers=len(SCENARIOS) + 1) as pool:
             public = pool.submit(_public_tests, sandbox, volume)
             futures = [

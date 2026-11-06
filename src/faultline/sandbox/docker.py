@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from faultline.sandbox.archive import Tree, build_tar, read_tar
+
 BUILD_CONTEXT = Path(__file__).parent
 _BUILD_FILES = ("Dockerfile", "provider.py", "toolbox.py")
 _LABEL = "faultline.sandbox"
@@ -185,7 +187,11 @@ class Sandbox:
         return f"fl-{self.sandbox_id}-{suffix}"
 
     def volume(self, suffix: str) -> str:
-        """A size-limited, memory-backed volume, so agent code cannot fill the host's disk."""
+        """A size-limited, memory-backed volume, so agent code cannot fill the host's disk.
+
+        A tmpfs volume is emptied when nothing has it mounted, so an idle container holds it open
+        for as long as the sandbox lives, whatever happens to the containers that use it.
+        """
         name = self.name(suffix)
         docker(
             "volume",
@@ -197,7 +203,29 @@ class Sandbox:
             *self._labels,
             name,
         )
+        self.start(
+            f"{suffix}-holder", ["sleep", "infinity"], mounts={"/data": name}, networked=False
+        )
         return name
+
+    def write_volume(self, volume: str, tree: Tree) -> None:
+        """Replace a volume's contents from a throwaway container that runs no agent code."""
+        script = "find /data -mindepth 1 -delete && tar --extract --no-same-owner --directory=/data"
+        self._throwaway(volume, ["sh", "-c", script], stdin=build_tar(tree))
+
+    def read_volume(self, volume: str) -> Tree:
+        """Read a volume from a throwaway container, unaffected by anything agent code is doing."""
+        return read_tar(
+            self._throwaway(f"{volume}:ro", ["tar", "--create", "--directory=/data", "."])
+        )
+
+    def _throwaway(self, source: str, command: list[str], stdin: bytes | None = None) -> bytes:
+        args = self.container_args(
+            f"io-{secrets.token_hex(4)}", mounts={"/data": source}, networked=False
+        )
+        interactive = ("--interactive",) if stdin is not None else ()
+        completed = docker("run", "--rm", *interactive, *args, self.image, *command, stdin=stdin)
+        return completed.stdout
 
     def container_args(
         self,

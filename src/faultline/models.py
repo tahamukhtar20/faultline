@@ -41,7 +41,6 @@ class Observation(FrozenModel):
     service_summary: str = "unknown"
     diff_summary: str = "no changes"
     remaining_steps: int = Field(ge=0)
-    remaining_seconds: float = Field(ge=0)
 
 
 class Difficulty(FrozenModel):

@@ -97,7 +97,6 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
                 "service_summary": spaces.Text(max_length=1_000, charset=printable),
                 "diff_summary": spaces.Text(max_length=1_000, charset=printable),
                 "remaining_steps": spaces.Box(0, 10_000, shape=(), dtype=np.int64),
-                "remaining_seconds": spaces.Box(0, 100_000, shape=(), dtype=np.float32),
             }
         )
         self._store_directory: tempfile.TemporaryDirectory[str] | None = None
@@ -110,7 +109,7 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
         self._trajectory: TrajectoryWriter | None = None
         self._steps = 0
         self._spent_seconds = 0.0
-        self._episode_started = 0.0
+        self._episode_started: float | None = None
         self._finished = False
         self._integrity_failed = False
         self._parent_checkpoint: str | None = None
@@ -136,7 +135,15 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
             raise RuntimeError("environment must be reset before use")
         return self._verification
 
+    @property
+    def remaining_seconds(self) -> float:
+        """Wall-clock budget left. Not in observations or info, which are deterministic."""
+        return max(0.0, self.instance.manifest.time_budget_seconds - self._elapsed())
+
     def _elapsed(self) -> float:
+        """Time spent acting. The clock starts at the first step, not during setup."""
+        if self._episode_started is None:
+            return self._spent_seconds
         return self._spent_seconds + (time.monotonic() - self._episode_started)
 
     def _observation(self, last_result: str, workspace: Tree | None = None) -> Observation:
@@ -153,14 +160,12 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
             service_summary=_printable(self.runtime.service_summary(), 1_000),
             diff_summary=_printable(diff, 1_000),
             remaining_steps=max(0, manifest.step_budget - self._steps),
-            remaining_seconds=max(0.0, manifest.time_budget_seconds - self._elapsed()),
         )
 
     @staticmethod
     def _as_space_value(observation: Observation) -> dict[str, Any]:
         payload = observation.model_dump()
         payload["remaining_steps"] = np.asarray(payload["remaining_steps"], dtype=np.int64)
-        payload["remaining_seconds"] = np.asarray(payload["remaining_seconds"], dtype=np.float32)
         return payload
 
     def reset(
@@ -190,7 +195,7 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
         self._runtime = EpisodeRuntime(instance, replay_incidents=self.replay_incidents)
         self._steps = 0
         self._spent_seconds = 0.0
-        self._episode_started = time.monotonic()
+        self._episode_started = None
         self._finished = False
         self._integrity_failed = False
         self._parent_checkpoint = None
@@ -242,6 +247,8 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
             raise ValueError(f"invalid action kind index: {kind_index}")
         tool_action = ToolAction(kind=ACTION_KINDS[kind_index], argument=str(action["argument"]))
         started = time.monotonic()
+        if self._episode_started is None:
+            self._episode_started = started
 
         self._steps += 1
         tool_result = self._execute(tool_action)
@@ -355,7 +362,7 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
     def _load_controller(self, controller: dict[str, Any], workspace: Tree) -> None:
         self._steps = int(controller["steps"])
         self._spent_seconds = float(controller["spent_seconds"])
-        self._episode_started = time.monotonic()
+        self._episode_started = None
         self._integrity_failed = bool(controller["integrity_failed"])
         self.reward_engine.load_state(controller["reward_engine"])
         self.runtime.noise_counter = int(controller["noise_counter"])

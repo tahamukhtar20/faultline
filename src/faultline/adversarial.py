@@ -102,7 +102,6 @@ class FaultlineAdversarialEnv(AECEnv[str, dict[str, Any], dict[str, Any]]):  # t
             "service_summary": "",
             "diff_summary": "",
             "remaining_steps": np.asarray(0, dtype=np.int64),
-            "remaining_seconds": np.asarray(0.0, dtype=np.float32),
         }
 
     def reset(self, seed: int | None = None, options: dict[str, Any] | None = None) -> None:

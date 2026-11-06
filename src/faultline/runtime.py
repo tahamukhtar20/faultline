@@ -12,8 +12,8 @@ import re
 from typing import Any
 
 from faultline.models import ActionKind, ToolAction
-from faultline.sandbox.archive import Tree, build_tar, read_tar
-from faultline.sandbox.docker import Container, Sandbox, ensure_image
+from faultline.sandbox.archive import Tree
+from faultline.sandbox.docker import Container, Sandbox, docker, ensure_image
 from faultline.scenarios import SCENARIOS_BY_NAME, run_scenario
 from faultline.stack import ServiceStack
 from faultline.taskgen import TaskInstance
@@ -56,24 +56,14 @@ class EpisodeRuntime:
             self.run_incidents()
 
     def write_workspace(self, tree: Tree) -> None:
-        self._replace_directory("/workspace", tree)
-
-    def _replace_directory(self, directory: str, tree: Tree) -> None:
-        self.solver.run(["find", directory, "-mindepth", "1", "-delete"], timeout=30)
-        self.solver.run(
-            ["tar", "--extract", "--no-same-owner", f"--directory={directory}"],
-            stdin=build_tar(tree),
-            timeout=30,
-        )
-
-    def _export_directory(self, directory: str) -> Tree:
-        completed = self.solver.run(
-            ["tar", "--create", f"--directory={directory}", "."], timeout=30
-        )
-        return read_tar(completed.stdout)
+        self._sandbox.write_volume(self._workspace, tree)
 
     def export_workspace(self) -> Tree:
-        return self._export_directory("/workspace")
+        return self._sandbox.read_volume(self._workspace)
+
+    def reset_solver(self) -> None:
+        """Clear any processes agent code left running, keeping the files."""
+        docker("restart", "--time=0", self.solver.name, timeout=30)
 
     def start_services(self) -> None:
         self.stack.start_api()
@@ -178,6 +168,7 @@ class EpisodeRuntime:
 
     def _restart(self) -> str:
         self.stack.stop_services()
+        self.reset_solver()
         self.start_services()
         if self.replay_incidents:
             self.run_incidents()
@@ -192,14 +183,16 @@ class EpisodeRuntime:
     def capture_state(self) -> tuple[Tree, Tree, dict[str, Any]]:
         """Stop the service, then read its files, so that the database is at rest."""
         self.stack.stop_services()
-        state = self.export_workspace(), self._export_directory("/data"), self.stack.ledger()
+        data = self._sandbox.read_volume(self.stack.data_volume)
+        state = self.export_workspace(), data, self.stack.ledger()
         self.start_services()
         return state
 
     def restore_state(self, workspace: Tree, data: Tree, ledger: dict[str, Any]) -> None:
         self.stack.stop_services()
+        self.reset_solver()
         self.write_workspace(workspace)
-        self._replace_directory("/data", data)
+        self._sandbox.write_volume(self.stack.data_volume, data)
         self.stack.provider.call(
             "load",
             charges=ledger["charges"],

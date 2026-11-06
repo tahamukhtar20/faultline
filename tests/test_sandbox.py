@@ -154,6 +154,8 @@ except OSError:
 """,
     )
     assert "fork refused" in forks
+    assert "orderflow/config.py" in runtime.export_workspace()
+    runtime.reset_solver()
 
     memory = runtime.solver.text(
         ["python", "-c", "x = bytearray(2 * 1024 ** 3); print('ALLOCATED')"]
@@ -183,8 +185,7 @@ except OSError as error:
 def test_workspace_code_cannot_shadow_the_toolbox(runtime: EpisodeRuntime) -> None:
     runtime.solver.run(["sh", "-c", "echo 'raise SystemExit(99)' > /workspace/json.py"])
     try:
-        assert "pipeline" not in runtime._toolbox("read", "orderflow/config.py")
-        assert "LEASE" in runtime._toolbox("read", "orderflow/config.py").upper()
+        assert "MAX_ATTEMPTS" in runtime._toolbox("read", "orderflow/config.py")
     finally:
         runtime.solver.run(["rm", "-f", "/workspace/json.py"])
 

@@ -155,8 +155,5 @@ def run_episode(
     policy(env, observation, step)
     if not finished["done"]:
         step(ActionKind.SUBMIT, "")
-    result.seconds = float(
-        env.instance.manifest.time_budget_seconds
-        - float(env._last_observation_required().remaining_seconds)
-    )
+    result.seconds = env.instance.manifest.time_budget_seconds - env.remaining_seconds
     return result

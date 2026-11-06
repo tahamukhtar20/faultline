@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from faultline.models import RewardMode, VerificationResult
 
@@ -20,12 +21,17 @@ class RewardBreakdown:
 
 
 class RewardEngine:
-    """Pays only for changes in verifier state, never for what the agent claims."""
+    """Pays only for changes in verifier state, never for what the agent claims.
 
-    _PUBLIC_WEIGHT = 0.10
-    _INVARIANT_WEIGHT = 0.40
-    _PERFORMANCE_WEIGHT = 0.10
-    _TERMINAL_WEIGHT = 0.40
+    Shaped progress is the change in a potential, so any sequence of actions that returns to the
+    same state, such as repairing, restoring and repairing again, nets to zero.
+    """
+
+    PUBLIC_WEIGHT = 0.10
+    INVARIANT_WEIGHT = 0.25
+    RESILIENCE_WEIGHT = 0.15
+    PERFORMANCE_WEIGHT = 0.10
+    TERMINAL_WEIGHT = 0.40
 
     def __init__(self, mode: RewardMode = RewardMode.SHAPED, action_cost: float = 0.001):
         if action_cost < 0:
@@ -44,14 +50,25 @@ class RewardEngine:
         self._previous_potential = self.potential(result)
         self._terminal_paid = False
 
+    def state(self) -> dict[str, Any]:
+        return {
+            "previous_potential": self._previous_potential,
+            "terminal_paid": self._terminal_paid,
+        }
+
+    def load_state(self, state: dict[str, Any]) -> None:
+        self._previous_potential = float(state["previous_potential"])
+        self._terminal_paid = bool(state["terminal_paid"])
+
     @classmethod
     def potential(cls, result: VerificationResult) -> float:
         if not result.integrity_ok:
             return 0.0
         return (
-            cls._PUBLIC_WEIGHT * result.public_behavior
-            + cls._INVARIANT_WEIGHT * result.hidden_invariants
-            + cls._PERFORMANCE_WEIGHT * result.performance
+            cls.PUBLIC_WEIGHT * result.public_behavior
+            + cls.INVARIANT_WEIGHT * result.hidden_invariants
+            + cls.RESILIENCE_WEIGHT * result.resilience
+            + cls.PERFORMANCE_WEIGHT * result.performance
         )
 
     def step(self, result: VerificationResult, *, submitted: bool = False) -> RewardBreakdown:
@@ -64,7 +81,7 @@ class RewardEngine:
 
         terminal = 0.0
         if submitted and result.success and not self._terminal_paid:
-            terminal = self._TERMINAL_WEIGHT
+            terminal = self.TERMINAL_WEIGHT
             self._terminal_paid = True
 
         return RewardBreakdown(

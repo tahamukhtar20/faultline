@@ -27,6 +27,7 @@ packages = ["src/faultline"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
 testpaths = ["tests"]
+markers = ["docker: needs a running Docker engine"]
 
 [tool.ruff]
 line-length = 100
@@ -37,4 +38,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
 strict = true
-exclude = ["src/faultline/worlds/orderflow/template/"]
+exclude = ["src/faultline/worlds/"]

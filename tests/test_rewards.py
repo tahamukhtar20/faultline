@@ -6,15 +6,22 @@ def result(
     *,
     public: float = 0,
     invariants: float = 0,
+    resilience: float = 0,
     performance: float = 0,
     integrity: bool = True,
+    critical: bool = True,
 ) -> VerificationResult:
     return VerificationResult(
         public_behavior=public,
         hidden_invariants=invariants,
+        resilience=resilience,
         performance=performance,
         integrity_ok=integrity,
+        critical_invariants_ok=critical,
     )
+
+
+COMPLETE = result(public=1, invariants=1, resilience=1, performance=1)
 
 
 def test_shaped_reward_only_pays_for_verified_progress() -> None:
@@ -37,11 +44,10 @@ def test_regression_removes_previous_progress() -> None:
 
 def test_sparse_mode_only_pays_terminal_success() -> None:
     engine = RewardEngine(mode=RewardMode.SPARSE, action_cost=0)
-    complete = result(public=1, invariants=1, performance=1)
 
-    before_submission = engine.step(complete)
-    submission = engine.step(complete, submitted=True)
-    repeated_submission = engine.step(complete, submitted=True)
+    before_submission = engine.step(COMPLETE)
+    submission = engine.step(COMPLETE, submitted=True)
+    repeated_submission = engine.step(COMPLETE, submitted=True)
 
     assert before_submission.total == 0
     assert submission.total == 0.40
@@ -54,3 +60,22 @@ def test_integrity_violation_dominates_partial_progress() -> None:
     hacked = engine.step(result(public=1, invariants=1, integrity=False), submitted=True)
 
     assert hacked.total == -1
+
+
+def test_all_components_sum_to_one() -> None:
+    engine = RewardEngine(action_cost=0)
+    assert round(engine.step(COMPLETE, submitted=True).total, 10) == 1
+
+
+def test_critical_failure_blocks_success_despite_full_scores() -> None:
+    assert not result(public=1, invariants=1, resilience=1, performance=1, critical=False).success
+
+
+def test_reward_state_round_trips() -> None:
+    engine = RewardEngine(action_cost=0)
+    engine.step(COMPLETE, submitted=True)
+    restored = RewardEngine(action_cost=0)
+
+    restored.load_state(engine.state())
+
+    assert restored.step(COMPLETE, submitted=True).total == 0

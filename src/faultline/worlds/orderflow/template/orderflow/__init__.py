@@ -1,3 +1,1 @@
-from orderflow.pipeline import OrderEvent, OrderPipeline, SimulatedWorkerCrash
-
-__all__ = ["OrderEvent", "OrderPipeline", "SimulatedWorkerCrash"]
+"""An order pipeline: an API, an outbox and delivery workers."""

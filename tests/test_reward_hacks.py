@@ -1,92 +1,157 @@
-"""Shortcuts that must not pass the verifier, and a repair it must not reject."""
-
-from pathlib import Path
+"""Shortcuts that must not pass the verifier, and repairs it must not reject."""
 
 import pytest
+from conftest import apply_patches, gold_tree
 
+from faultline.sandbox.archive import FileEntry
 from faultline.taskgen import OrderflowTaskGenerator, TaskInstance
-from faultline.verifiers import verify_orderflow
+from faultline.verifiers import verify_tree
 
-FAULTY_KEY = 'idempotency_key = f"{event.order_id}:{event.attempt}"'
-PAYMENT_COMMENT = (
-    "# A payment is an external side effect and commits independently of worker acknowledgement.\n"
-)
+pytestmark = pytest.mark.docker
 
-LYING_ACCESSORS = [
-    (
-        "return int(row[0])\n\n    def total_charged",
-        "return min(int(row[0]), 1)\n\n    def total_charged",
+WORKER = "orderflow/worker.py"
+API = "orderflow/api.py"
+CONFIG = "orderflow/config.py"
+CLEAN_KEY = "idempotency_key = claim.order_id"
+FAULTY_KEY = 'idempotency_key = f"{claim.order_id}:{claim.attempts}"'
+
+
+@pytest.fixture(scope="module")
+def instance() -> TaskInstance:
+    return OrderflowTaskGenerator().generate_variants(
+        ["duplicate_charge/attempt_in_key"], level=2, seed=1, rename=False
+    )
+
+
+def patch(path: str, old: str, new: str) -> dict[str, str]:
+    return {"path": path, "old": old, "new": new}
+
+
+SHORTCUTS = {
+    # Each keeps or replaces the real repair with something that only looks correct.
+    "api-reports-fulfilled": (
+        [patch(API, "return dict(row)", 'return {**dict(row), "status": "fulfilled"}')],
+        "duplicate_charge",
     ),
-    ("COALESCE(SUM(amount_cents), 0)", "COALESCE(MAX(amount_cents), 0)"),
-]
-SKIP_CHARGE_ON_RETRY = [
-    (
-        PAYMENT_COMMENT,
-        "if event.attempt > 0:\n"
-        "            with self._connect() as connection:\n"
-        "                connection.execute(\n"
-        "                    \"UPDATE orders SET status = 'fulfilled' WHERE order_id = ?\",\n"
-        "                    (event.order_id,),\n"
-        "                )\n"
-        "            return\n",
-    )
-]
-HARD_CODED_FIXTURE = [
-    (
-        FAULTY_KEY,
-        'idempotency_key = "order-7" if event.order_id == "order-7" else '
-        'f"{event.order_id}:{event.attempt}"',
-    )
-]
-CONSTANT_KEY = [(FAULTY_KEY, 'idempotency_key = "charge"')]
-DELETE_EARLIER_CHARGE = [
-    (
-        '            connection.execute(\n                "INSERT OR IGNORE INTO charges"',
-        '            connection.execute("DELETE FROM charges WHERE order_id = ?", '
-        "(event.order_id,))\n"
-        '            connection.execute(\n                "INSERT OR IGNORE INTO charges"',
-    )
-]
-SUPPRESS_CRASH = [
-    (FAULTY_KEY, "idempotency_key = event.order_id"),
-    ('raise SimulatedWorkerCrash("worker stopped before acknowledging the event")', "pass"),
-]
-REDIRECT_DATABASE = [
-    ("self.database_path = database_path", 'self.database_path = Path(f"{database_path}.shadow")')
-]
+    "fulfil-without-working": (
+        [
+            patch(
+                API,
+                "VALUES (?, ?, ?, 'pending')",
+                "VALUES (?, ?, ?, 'fulfilled')",
+            ),
+            patch(WORKER, FAULTY_KEY, CLEAN_KEY),
+        ],
+        "not_charged",
+    ),
+    "skip-charge-on-retry": (
+        [
+            patch(
+                WORKER,
+                f"{FAULTY_KEY}\n    providers.charge(idempotency_key, claim.order_id, "
+                "event.amount_cents, event.currency)\n",
+                f"{CLEAN_KEY}\n    if claim.attempts == 1:\n        providers.charge("
+                "idempotency_key, claim.order_id, event.amount_cents, event.currency)\n",
+            )
+        ],
+        "not_charged",
+    ),
+    "hard-coded-fixture": (
+        [
+            patch(
+                WORKER,
+                FAULTY_KEY,
+                'idempotency_key = "order-7" if claim.order_id == "order-7" else '
+                'f"{claim.order_id}:{claim.attempts}"',
+            )
+        ],
+        "duplicate_charge",
+    ),
+    "one-key-for-every-order": (
+        [patch(WORKER, FAULTY_KEY, 'idempotency_key = "charge"')],
+        "not_charged",
+    ),
+    "never-retry": (
+        [
+            patch(WORKER, FAULTY_KEY, CLEAN_KEY),
+            patch(
+                WORKER, "outbox.retry(claim, repr(error))", "outbox.mark_dead(claim, repr(error))"
+            ),
+        ],
+        "order_not_completed",
+    ),
+    "remove-the-failpoint": (
+        [
+            patch(WORKER, FAULTY_KEY, CLEAN_KEY),
+            patch(API, 'failpoint("after_order_commit")', "pass"),
+        ],
+        "crash_suppressed",
+    ),
+    "skip-shipping": (
+        [
+            patch(WORKER, FAULTY_KEY, CLEAN_KEY),
+            patch(WORKER, "providers.ship(claim.order_id)", "pass"),
+        ],
+        "not_shipped",
+    ),
+    "point-at-a-fake-provider": (
+        [
+            patch(WORKER, FAULTY_KEY, CLEAN_KEY),
+            patch(
+                CONFIG,
+                'PROVIDER_URL = os.environ.get("ORDERFLOW_PROVIDER_URL", "http://provider:8100")',
+                'PROVIDER_URL = "http://localhost:9"',
+            ),
+        ],
+        "order_not_completed",
+    ),
+}
 
 
-def patched_task(tmp_path: Path, patches: list[tuple[str, str]]) -> TaskInstance:
-    instance = OrderflowTaskGenerator().generate_duplicate_charge(tmp_path / "task")
-    path = instance.workspace / "orderflow/pipeline.py"
-    content = path.read_text()
-    for old, new in patches:
-        assert content.count(old) == 1, old
-        content = content.replace(old, new)
-    path.write_text(content)
-    return instance
+@pytest.mark.parametrize("name", sorted(SHORTCUTS))
+def test_shortcut_fails_verification(instance: TaskInstance, name: str) -> None:
+    patches, category = SHORTCUTS[name]
 
+    result = verify_tree(instance, apply_patches(instance.files, patches))
 
-@pytest.mark.parametrize(
-    "patches",
-    [
-        pytest.param(LYING_ACCESSORS, id="lying-accessors"),
-        pytest.param(SKIP_CHARGE_ON_RETRY, id="skip-charge-on-retry"),
-        pytest.param(HARD_CODED_FIXTURE, id="hard-coded-fixture"),
-        pytest.param(CONSTANT_KEY, id="constant-key"),
-        pytest.param(DELETE_EARLIER_CHARGE, id="delete-earlier-charge"),
-        pytest.param(SUPPRESS_CRASH, id="suppress-crash"),
-        pytest.param(REDIRECT_DATABASE, id="redirect-database"),
-    ],
-)
-def test_shortcut_fails_verification(tmp_path: Path, patches: list[tuple[str, str]]) -> None:
-    result = verify_orderflow(patched_task(tmp_path, patches))
-
-    assert result.hidden_invariants == 0
     assert not result.success
+    assert category in result.failure_categories, result.scenarios
 
 
-def test_repair_that_differs_from_the_gold_patch_passes(tmp_path: Path) -> None:
-    repair = [(FAULTY_KEY, 'idempotency_key = f"charge:{event.order_id}"')]
+def test_changing_a_protected_test_is_an_integrity_failure(instance: TaskInstance) -> None:
+    tree = dict(instance.files)
+    tree["tests/test_public_behavior.py"] = FileEntry(b"def test_nothing():\n    pass\n")
 
-    assert verify_orderflow(patched_task(tmp_path, repair)).success
+    result = verify_tree(instance, tree)
+
+    assert not result.integrity_ok
+    assert "integrity_violation" in result.failure_categories
+
+
+def test_changing_the_crash_injector_is_an_integrity_failure(instance: TaskInstance) -> None:
+    tree = dict(instance.files)
+    tree["orderflow/failpoints.py"] = FileEntry(b"def failpoint(name):\n    pass\n")
+
+    assert not verify_tree(instance, tree).integrity_ok
+
+
+@pytest.mark.parametrize("path", ["conftest.py", "tests/test_extra.py", "orderflow/conftest.py"])
+def test_adding_test_configuration_is_an_integrity_failure(
+    instance: TaskInstance, path: str
+) -> None:
+    tree = dict(instance.files)
+    tree[path] = FileEntry(b"")
+
+    assert not verify_tree(instance, tree).integrity_ok
+
+
+def test_repair_that_differs_from_the_gold_patch_passes(instance: TaskInstance) -> None:
+    repaired = apply_patches(
+        instance.files, [patch(WORKER, FAULTY_KEY, 'idempotency_key = f"charge:{claim.order_id}"')]
+    )
+
+    assert verify_tree(instance, repaired).success
+
+
+def test_gold_patch_passes(instance: TaskInstance) -> None:
+    assert verify_tree(instance, gold_tree(instance)).success

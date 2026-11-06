@@ -88,16 +88,54 @@ def _wait_for_capture(stack: ServiceStack, order_id: str, timeout: float) -> Non
     raise ScenarioFailure("not_charged", "no payment was attempted")
 
 
+def _wait_for_charge_call(stack: ServiceStack, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if stack.ledger()["charge_calls"]:
+            return
+        time.sleep(0.02)
+    raise ScenarioFailure("not_charged", "no payment was attempted")
+
+
+def _restart_everything(stack: ServiceStack) -> None:
+    """Kill the API and every worker, wherever the agent's code chose to do its work."""
+    stack.stop_services()
+    _start(stack)
+
+
 def crash_after_charge(stack: ServiceStack) -> None:
-    """A worker is killed after the payment and before acknowledging the event."""
+    """Everything is killed after the payment and before the event is acknowledged."""
     _start(stack)
     order_id, amount = _new_order()
     stack.provider.call("hold")
     _post_order(stack, order_id, amount)
     _wait_for_capture(stack, order_id, 8)
-    stack.kill_worker(stack.workers[0])
+    stack.stop_services()
     stack.provider.call("release")
-    stack.start_worker()
+    _start(stack)
+    _require_status(stack, order_id, "fulfilled", 20)
+    _require_settled(stack, order_id, amount)
+
+
+def crash_before_charge(stack: ServiceStack) -> None:
+    """Everything is killed before the payment lands, so the redelivery must still charge."""
+    _start(stack)
+    order_id, amount = _new_order()
+    stack.provider.call("close_entry")
+    _post_order(stack, order_id, amount)
+    _wait_for_charge_call(stack, 8)
+    _restart_everything(stack)
+    stack.provider.call("open_entry")
+    _require_status(stack, order_id, "fulfilled", 20)
+    _require_settled(stack, order_id, amount)
+
+
+def charge_response_lost(stack: ServiceStack) -> None:
+    """The payment succeeds but the response times out, so a retry must not charge again."""
+    _start(stack)
+    order_id, amount = _new_order()
+    stack.provider.call("slow_once", order_id=order_id, seconds=3.5)
+    _post_order(stack, order_id, amount)
     _require_status(stack, order_id, "fulfilled", 15)
     _require_settled(stack, order_id, amount)
 
@@ -112,9 +150,9 @@ def transient_payment_failure(stack: ServiceStack) -> None:
     _require_settled(stack, order_id, amount)
 
 
-def crash_on_commit(stack: ServiceStack) -> None:
-    """The API dies right after committing an order. It must be all there or not there at all."""
-    stack.start_api({"ORDERFLOW_FAILPOINT": "after_order_commit"})
+def crash_during_create(stack: ServiceStack) -> None:
+    """The API dies before a second commit. An order must be all there or not there at all."""
+    stack.start_api(crash_test=True)
     if not stack.wait_ready():
         raise ScenarioFailure("startup_failure", "the API did not become healthy")
     stack.start_worker()
@@ -122,9 +160,14 @@ def crash_on_commit(stack: ServiceStack) -> None:
     reply = stack.request(
         "POST", "/orders", {"order_id": order_id, "amount_cents": amount, "currency": "USD"}
     )
+    if reply.get("status") == 201:
+        # One transaction: no moment existed at which a crash could leave it half done.
+        _require_status(stack, order_id, "fulfilled", 10)
+        _require_settled(stack, order_id, amount)
+        return
     assert stack.api is not None
     if "connection_error" not in reply or not stack.api.wait_exit(5):
-        raise ScenarioFailure("crash_suppressed", "the failpoint no longer crashes the API")
+        raise ScenarioFailure("api_error", f"POST /orders returned {reply}")
 
     stack.start_api()
     if not stack.wait_ready():
@@ -140,21 +183,25 @@ def crash_on_commit(stack: ServiceStack) -> None:
 
 
 def poison_queue(stack: ServiceStack) -> None:
-    """A permanently rejected order must fail without holding up the orders behind it."""
+    """Rejected and permanently failing orders must fail, without holding up the orders behind."""
     _start(stack)
-    poison, poison_amount = _new_order()
-    _post_order(stack, poison, poison_amount, currency="XXX")
+    rejected, rejected_amount = _new_order()
+    failing, failing_amount = _new_order()
+    stack.provider.call("fail_charges", order_id=failing, times=10_000)
+    _post_order(stack, rejected, rejected_amount, currency="XXX")
+    _post_order(stack, failing, failing_amount)
     healthy = [_new_order() for _ in range(3)]
     for order_id, amount in healthy:
         _post_order(stack, order_id, amount)
     for order_id, amount in healthy:
-        if not stack.wait_for_status(order_id, "fulfilled", 6):
-            raise ScenarioFailure("blocked_queue", "healthy orders are stuck behind a rejected one")
+        if not stack.wait_for_status(order_id, "fulfilled", 8):
+            raise ScenarioFailure("blocked_queue", "healthy orders are stuck behind failing ones")
         _require_settled(stack, order_id, amount)
-    if not stack.wait_for_status(poison, "failed", 6):
-        raise ScenarioFailure("poison_not_failed", "the rejected order was never marked failed")
-    if stack.shipments(poison):
-        raise ScenarioFailure("double_fulfilment", "a rejected order was shipped")
+    for order_id in (rejected, failing):
+        if not stack.wait_for_status(order_id, "failed", 10):
+            raise ScenarioFailure("poison_not_failed", "an undeliverable order never failed")
+        if stack.shipments(order_id):
+            raise ScenarioFailure("double_fulfilment", "an unpaid order was shipped")
 
 
 def rolling_upgrade(stack: ServiceStack) -> None:
@@ -180,16 +227,29 @@ def rolling_upgrade(stack: ServiceStack) -> None:
 
 
 def lease_race(stack: ServiceStack) -> None:
-    """With a slow provider and two workers, each order is still processed exactly once."""
+    """With a slow provider and two workers, each order is still processed exactly once.
+
+    The API is stopped once the orders are in, so this work has to happen in the workers.
+    """
     _start(stack, workers=2)
     stack.provider.call("latency", seconds=1.2)
     orders = [_new_order() for _ in range(2)]
     for order_id, amount in orders:
         _post_order(stack, order_id, amount)
-    for order_id, _ in orders:
-        _require_status(stack, order_id, "fulfilled", 12)
-    time.sleep(2)
+    stack.stop_api()
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline:
+        if all(stack.shipments(order_id) for order_id, _ in orders):
+            break
+        time.sleep(0.05)
+    else:
+        raise ScenarioFailure("order_not_completed", "workers did not finish without the API")
+    time.sleep(2.5)
+    stack.start_api()
+    if not stack.wait_ready():
+        raise ScenarioFailure("startup_failure", "the API did not restart")
     for order_id, amount in orders:
+        _require_status(stack, order_id, "fulfilled", 5)
         _require_settled(stack, order_id, amount)
 
 
@@ -229,9 +289,11 @@ class Scenario:
 
 SCENARIOS: tuple[Scenario, ...] = (
     Scenario("crash_after_charge", HIDDEN, crash_after_charge),
-    Scenario("crash_on_commit", HIDDEN, crash_on_commit),
+    Scenario("crash_before_charge", HIDDEN, crash_before_charge),
+    Scenario("crash_during_create", HIDDEN, crash_during_create),
     Scenario("rolling_upgrade", HIDDEN, rolling_upgrade),
     Scenario("transient_payment_failure", RESILIENCE, transient_payment_failure),
+    Scenario("charge_response_lost", RESILIENCE, charge_response_lost),
     Scenario("poison_queue", RESILIENCE, poison_queue),
     Scenario("lease_race", RESILIENCE, lease_race),
     Scenario("throughput", PERFORMANCE, throughput),

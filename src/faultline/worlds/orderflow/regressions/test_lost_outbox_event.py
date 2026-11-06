@@ -2,15 +2,13 @@ import pytest
 from orderflow import api, db
 
 
-def test_order_and_event_commit_together(client, monkeypatch) -> None:
-    class Crash(Exception):
-        pass
+@pytest.mark.parametrize("failing_step", ["insert_order", "insert_event"])
+def test_order_and_event_commit_together(client, monkeypatch, failing_step) -> None:
+    def fail(*args) -> None:
+        raise RuntimeError("database write failed")
 
-    def crash(name: str) -> None:
-        raise Crash
-
-    monkeypatch.setattr(api, "failpoint", crash)
-    with pytest.raises(Crash):
+    monkeypatch.setattr(api, failing_step, fail)
+    with pytest.raises(RuntimeError):
         client.post("/orders", json={"order_id": "order-5", "amount_cents": 500})
 
     connection = db.connect()

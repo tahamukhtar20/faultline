@@ -9,7 +9,15 @@ from typing import Any
 import pytest
 
 from faultline.runtime import EpisodeRuntime
-from faultline.sandbox.docker import Container, Sandbox, docker, ensure_image, remove_sandboxes
+from faultline.sandbox.docker import (
+    MAX_COMMAND_OUTPUT_BYTES,
+    Container,
+    Sandbox,
+    capped,
+    docker,
+    ensure_image,
+    remove_sandboxes,
+)
 from faultline.taskgen import OrderflowTaskGenerator
 
 pytestmark = pytest.mark.docker
@@ -118,6 +126,53 @@ for method, path in [("GET", "/ledger"), ("POST", "/ledger"), ("POST", "/load"),
     )
     assert "200" not in output
     assert "/ledger" in output
+
+
+def test_container_names_do_not_reveal_what_is_running(runtime: EpisodeRuntime) -> None:
+    assert "live" not in runtime.stack.provider.host
+    assert runtime.stack.api is not None
+    assert "live" not in runtime.stack.api.name
+
+
+def test_unbounded_output_is_capped(runtime: EpisodeRuntime) -> None:
+    completed = runtime.solver.run(capped(["python", "-c", "print('x' * 50_000_000)"]), timeout=30)
+
+    assert len(completed.stdout) <= MAX_COMMAND_OUTPUT_BYTES
+
+
+def test_logs_are_size_limited(runtime: EpisodeRuntime) -> None:
+    assert runtime.stack.api is not None
+    log_config = inspect(runtime.stack.api)["HostConfig"]["LogConfig"]
+
+    assert log_config["Type"] == "local"
+    assert log_config["Config"]["max-size"] == "5m"
+
+
+def test_provider_survives_a_malformed_response(runtime: EpisodeRuntime) -> None:
+    """A service that answers with garbage must not take the ledger down with it."""
+    assert runtime.stack.api is not None
+    runtime.stack.api.run(
+        [
+            "python",
+            "-c",
+            "import socket\n"
+            "server = socket.create_server(('0.0.0.0', 8001))\n"
+            "connection, _ = server.accept()\n"
+            "connection.sendall(b'this is not http\\r\\n\\r\\n')\n"
+            "connection.close()\n",
+        ],
+        timeout=1,
+    )
+    reply = runtime.stack.provider.call(
+        "request",
+        url=f"http://{runtime.stack.api.name}:8001/",
+        method="GET",
+        json=None,
+        request_timeout=1,
+    )
+
+    assert "connection_error" in reply
+    assert "charges" in runtime.stack.ledger()
 
 
 def test_verifier_code_is_not_visible_to_agent_code(runtime: EpisodeRuntime) -> None:

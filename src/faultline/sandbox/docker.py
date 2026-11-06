@@ -18,10 +18,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from faultline.sandbox.archive import Tree, build_tar, read_tar
+from faultline.sandbox.archive import ArchiveError, Tree, build_tar, read_tar
 
 BUILD_CONTEXT = Path(__file__).parent
-_BUILD_FILES = ("Dockerfile", "provider.py", "toolbox.py")
+_BUILD_FILES = ("Dockerfile", "provider.py", "toolbox.py", "crash_api.py")
 _LABEL = "faultline.sandbox"
 _VOLUME_SIZE = "128m"
 _HARDENING = (
@@ -36,7 +36,12 @@ _HARDENING = (
     "--memory-swap=512m",
     "--cpus=1",
     "--workdir=/workspace",
+    "--log-driver=local",
+    "--log-opt=max-size=5m",
+    "--log-opt=max-file=1",
+    "--log-opt=compress=false",
 )
+MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024
 
 
 class DockerError(RuntimeError):
@@ -85,6 +90,13 @@ def remove_sandboxes(sandbox_id: str | None = None) -> None:
     volumes = docker("volume", "ls", "-q", "--filter", selector, check=False).stdout.split()
     if volumes:
         docker("volume", "rm", "-f", *[v.decode() for v in volumes], check=False)
+
+
+def capped(command: list[str]) -> list[str]:
+    """Wrap a command that runs agent code, so its output cannot fill the host's memory."""
+    limit = str(MAX_COMMAND_OUTPUT_BYTES)
+    script = f'set -o pipefail; "$@" 2>&1 | head --bytes={limit}'
+    return ["bash", "-c", script, "bash", *command]
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,9 +227,11 @@ class Sandbox:
 
     def read_volume(self, volume: str) -> Tree:
         """Read a volume from a throwaway container, unaffected by anything agent code is doing."""
-        return read_tar(
-            self._throwaway(f"{volume}:ro", ["tar", "--create", "--directory=/data", "."])
-        )
+        try:
+            archive = self._throwaway(f"{volume}:ro", ["tar", "--create", "--directory=/data", "."])
+        except DockerError as error:
+            raise ArchiveError(f"volume cannot be read: {error}") from error
+        return read_tar(archive)
 
     def _throwaway(self, source: str, command: list[str], stdin: bytes | None = None) -> bytes:
         args = self.container_args(

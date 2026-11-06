@@ -5,6 +5,7 @@ stdin and stdout, which the host holds, so nothing on the sandbox network can re
 Standard library only.
 """
 
+import http.client
 import json
 import sys
 import threading
@@ -28,11 +29,19 @@ class Ledger:
         self.latency_seconds = 0.0
         self.released = threading.Event()
         self.released.set()
+        self.entry_open = threading.Event()
+        self.entry_open.set()
+        self.slow_once: dict[str, float] = {}
 
     def charge(self, body: dict[str, object]) -> int:
         order_id = str(body.get("order_id"))
         with self.lock:
             self.charge_calls += 1
+        if not self.entry_open.is_set():
+            # This call dies with its worker: it never reaches the payment network.
+            self.entry_open.wait(HOLD_LIMIT_SECONDS)
+            return 503
+        with self.lock:
             remaining = self.transient_failures.get(order_id, 0)
             if remaining > 0:
                 self.transient_failures[order_id] = remaining - 1
@@ -48,7 +57,9 @@ class Ledger:
                 },
             )
         self.released.wait(HOLD_LIMIT_SECONDS)
-        time.sleep(self.latency_seconds)
+        with self.lock:
+            delay = self.slow_once.pop(order_id, self.latency_seconds)
+        time.sleep(delay)
         return 200
 
     def ship(self, body: dict[str, object]) -> int:
@@ -112,7 +123,7 @@ def forward(command: dict[str, Any]) -> dict[str, Any]:
             status, text = response.status, response.read(65_536).decode(errors="replace")
     except urllib.error.HTTPError as error:
         status, text = error.code, error.read(65_536).decode(errors="replace")
-    except OSError as error:
+    except (OSError, http.client.HTTPException, ValueError) as error:
         return {"connection_error": repr(error), "seconds": time.perf_counter() - started}
     return {"status": status, "text": text, "seconds": time.perf_counter() - started}
 
@@ -136,6 +147,16 @@ def execute(command: dict[str, Any]) -> dict[str, Any]:
     if operation == "latency":
         LEDGER.latency_seconds = float(command["seconds"])
         return {}
+    if operation == "close_entry":
+        LEDGER.entry_open.clear()
+        return {}
+    if operation == "open_entry":
+        LEDGER.entry_open.set()
+        return {}
+    if operation == "slow_once":
+        with LEDGER.lock:
+            LEDGER.slow_once[str(command["order_id"])] = float(command["seconds"])
+        return {}
     if operation == "hold":
         LEDGER.released.clear()
         return {}
@@ -153,7 +174,7 @@ def main() -> None:
     for line in sys.stdin:
         try:
             print(json.dumps(execute(json.loads(line))), flush=True)
-        except (KeyError, ValueError) as error:
+        except Exception as error:
             print(json.dumps({"error": repr(error)}), flush=True)
 
 

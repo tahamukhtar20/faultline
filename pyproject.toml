@@ -46,5 +46,5 @@ strict = true
 exclude = ["src/faultline/worlds/"]
 
 [[tool.mypy.overrides]]
-module = "pettingzoo.*"
+module = ["pettingzoo.*", "uvicorn"]
 ignore_missing_imports = true

@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import re
+import secrets
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 
 from faultline.models import ScenarioResult, VerificationResult
 from faultline.sandbox.archive import FileEntry, Tree, tree_hash
-from faultline.sandbox.docker import Sandbox, docker, ensure_image
+from faultline.sandbox.docker import Sandbox, capped, docker, ensure_image
 from faultline.scenarios import HIDDEN, PERFORMANCE, RESILIENCE, SCENARIOS, run_scenario
 from faultline.stack import ServiceStack
 from faultline.taskgen import FORBIDDEN_NAMES, TaskInstance, sha256_bytes
 
 PUBLIC_TIMEOUT_SECONDS = 60
+_REPORT_MARKER = "=====faultline-report====="
 
 
 class VerificationError(RuntimeError):
@@ -40,32 +43,62 @@ def integrity_violations(instance: TaskInstance, tree: Tree) -> list[str]:
     return violations
 
 
-def _public_tests(sandbox: Sandbox, volume: str) -> tuple[float, str]:
-    args = sandbox.container_args("public", mounts={"/workspace": f"{volume}:ro"}, networked=False)
+def _public_tests(sandbox: Sandbox, volume: str, expected: int) -> tuple[float, str]:
+    """Run the protected tests and require a complete report, not only a clean exit code.
+
+    A patch can make the process exit early with status 0, so every expected test must be reported
+    as having run and passed. The output is capped, because this runs agent code.
+    """
+    report = "/tmp/public-report.xml"
+    script = (
+        f"python -m pytest -q -p no:cacheprovider --junitxml={report} tests; "
+        f'status=$?; echo "{_REPORT_MARKER}"; cat {report}; exit $status'
+    )
+    args = sandbox.container_args(
+        f"public-{secrets.token_hex(4)}", mounts={"/workspace": f"{volume}:ro"}, networked=False
+    )
     completed = docker(
         "run",
         "--rm",
         *args,
         sandbox.image,
-        "timeout",
-        "--signal=KILL",
-        str(PUBLIC_TIMEOUT_SECONDS),
-        "python",
-        "-m",
-        "pytest",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-        "tests",
+        *capped(["timeout", "--signal=KILL", str(PUBLIC_TIMEOUT_SECONDS), "sh", "-c", script]),
         timeout=PUBLIC_TIMEOUT_SECONDS + 30,
         check=False,
     )
-    summary = (completed.stdout + completed.stderr).decode(errors="replace")[-2_000:]
-    return (1.0 if completed.returncode == 0 else 0.0, summary)
+    output = completed.stdout.decode(errors="replace")
+    summary, _, report_text = output.partition(_REPORT_MARKER)
+    counts = {
+        name: int(value)
+        for name, value in re.findall(r'\b(tests|failures|errors|skipped)="(\d+)"', report_text)
+    }
+    passed = (
+        completed.returncode == 0
+        and counts.get("tests") == expected
+        and not any(counts.get(name, 1) for name in ("failures", "errors", "skipped"))
+    )
+    return (1.0 if passed else 0.0, summary[-2_000:])
+
+
+def _count_tests(instance: TaskInstance) -> int:
+    return sum(
+        len(re.findall(r"^def test_", instance.files[path].data.decode(), re.MULTILINE))
+        + _parameter_count(instance.files[path].data.decode())
+        for path in instance.protected_hashes
+        if path.startswith("tests/test_")
+    )
+
+
+def _parameter_count(source: str) -> int:
+    """Extra test cases from parametrize lists, which are the only parametrization used."""
+    return sum(
+        len(re.findall(r'"[^"]+"', values)) - 1
+        for values in re.findall(r"parametrize\([^,]+, \[([^\]]*)\]", source)
+    )
 
 
 def _run_one(sandbox: Sandbox, volume: str, index: int) -> ScenarioResult:
-    stack = ServiceStack(sandbox, volume, f"s{index}")
+    stack = ServiceStack(sandbox, volume)
     try:
         return run_scenario(SCENARIOS[index], stack)
     finally:
@@ -102,7 +135,7 @@ def verify_tree(instance: TaskInstance, tree: Tree) -> VerificationResult:
         volume = sandbox.volume("workspace")
         sandbox.write_volume(volume, tree)
         with ThreadPoolExecutor(max_workers=len(SCENARIOS) + 1) as pool:
-            public = pool.submit(_public_tests, sandbox, volume)
+            public = pool.submit(_public_tests, sandbox, volume, _count_tests(instance))
             futures = [
                 pool.submit(_run_one, sandbox, volume, index) for index in range(len(SCENARIOS))
             ]
@@ -125,8 +158,10 @@ def verify_tree(instance: TaskInstance, tree: Tree) -> VerificationResult:
         scenarios=tuple(results),
         diagnostics=(f"public: {public_summary}",),
     )
-    with _cache_lock:
-        _cache[key] = result
+    # A time budget can be missed because the machine is busy, so that result is not kept.
+    if "too_slow" not in result.failure_categories:
+        with _cache_lock:
+            _cache[key] = result
     return result
 
 

@@ -83,15 +83,15 @@ A task is valid only if the injected code fails verification and the gold patche
 
 ## Scoring
 
-Seven private scenarios run in parallel, each on its own stack with random order IDs and amounts.
+Nine private scenarios run in parallel, each on its own stack with random order IDs and amounts.
 
 | Component | Scenarios |
 | --- | --- |
-| Hidden invariants | `crash_after_charge`, `crash_on_commit`, `rolling_upgrade` |
-| Resilience | `transient_payment_failure`, `poison_queue`, `lease_race` |
+| Hidden invariants | `crash_after_charge`, `crash_before_charge`, `crash_during_create`, `rolling_upgrade` |
+| Resilience | `transient_payment_failure`, `charge_response_lost`, `poison_queue`, `lease_race` |
 | Performance | `throughput` |
 
-Duplicate charges, charges for missing orders, wrong amounts and duplicate shipments are critical: no other score can make up for them. Crashes are real `SIGKILL`s of containers, so agent code cannot intercept them, and the verifier confirms that an injected crash actually happened.
+Duplicate charges, charges for missing orders, wrong amounts and duplicate shipments are critical: no other score can make up for them. Crashes are real `SIGKILL`s of containers, so agent code cannot intercept them. The order-creation crash test sits outside the agent's code and fires on the database's own commit statements, so it cannot be moved. The public test score needs a complete report of every expected test, not only a clean exit code.
 
 Shaped rewards are the change in a potential over these scores. Any path that returns to the same state therefore nets to zero, which is why repairing, restoring and repairing again cannot farm reward.
 

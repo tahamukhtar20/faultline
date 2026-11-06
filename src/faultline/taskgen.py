@@ -16,7 +16,7 @@ WORLD_ROOT = Path(__file__).parent / "worlds" / "orderflow"
 FORBIDDEN_NAMES = frozenset(
     {"conftest.py", "pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "sitecustomize.py"}
 )
-_ALWAYS_PROTECTED = ("orderflow/failpoints.py", "orderflow/legacy_producer.py")
+_ALWAYS_PROTECTED = ("orderflow/legacy_producer.py",)
 
 # Seeded renames, so an agent cannot rely on memorized identifiers or patches.
 _RENAMES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -173,7 +173,8 @@ def _build_issue(rng: random.Random, config: LevelConfig, families: list[str]) -
         for family in families[: max(1, len(families) - config.verifier_gap // 2)]
     ]
     lines.append(
-        "Do not disable payments, retries or shipping, and keep the public API compatible."
+        "Do not disable payments, retries or shipping, and keep the public API compatible. "
+        "Orders held by a crashed worker must recover within 15 seconds."
     )
     return " ".join(lines)
 

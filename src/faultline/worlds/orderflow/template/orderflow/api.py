@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 from orderflow import db, outbox
 from orderflow.events import encode_event
-from orderflow.failpoints import failpoint
 
 
 class OrderRequest(BaseModel):
@@ -44,7 +43,6 @@ def create_order(order: OrderRequest) -> dict[str, str]:
         with db.transaction() as connection:
             insert_order(connection, order)
             insert_event(connection, order)
-        failpoint("after_order_commit")
     except sqlite3.IntegrityError as error:
         raise HTTPException(status_code=409, detail="order already exists") from error
     return {"order_id": order.order_id, "status": "pending"}

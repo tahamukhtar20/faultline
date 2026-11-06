@@ -38,7 +38,6 @@ class FaultFamily:
 _CLEAN_KEY = "idempotency_key = claim.order_id"
 _COMMIT_TOGETHER = """            insert_order(connection, order)
             insert_event(connection, order)
-        failpoint("after_order_commit")
 """
 _DEAD_ON_REJECT = TextEdit(
     WORKER,
@@ -126,7 +125,7 @@ FAMILIES: dict[str, FaultFamily] = {
         ),
         _family(
             "lost_outbox_event",
-            incident="crash_on_commit",
+            incident="crash_during_create",
             delayed_effect=True,
             direct=(
                 "If the API crashes while creating an order, the order row and its outbox event "
@@ -144,7 +143,6 @@ FAMILIES: dict[str, FaultFamily] = {
                         API,
                         _COMMIT_TOGETHER,
                         """            insert_order(connection, order)
-        failpoint("after_order_commit")
         with db.transaction() as connection:
             insert_event(connection, order)
 """,
@@ -155,7 +153,6 @@ FAMILIES: dict[str, FaultFamily] = {
                         API,
                         _COMMIT_TOGETHER,
                         """            insert_event(connection, order)
-        failpoint("after_order_commit")
         with db.transaction() as connection:
             insert_order(connection, order)
 """,

@@ -115,6 +115,7 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
         self._parent_checkpoint: str | None = None
         self._workspace_hash = ""
         self._verification: VerificationResult | None = None
+        self._unsafe_state = ""
         self._last_observation: Observation | None = None
 
     @property
@@ -199,6 +200,7 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
         self._finished = False
         self._integrity_failed = False
         self._parent_checkpoint = None
+        self._unsafe_state = ""
         self._workspace_hash = tree_hash(instance.files)
         self._last_observation = None
         self._last_observation = self._observation("episode initialized", instance.files)
@@ -217,6 +219,8 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
         symlink, is an integrity violation.
         """
         try:
+            if self._unsafe_state:
+                raise ArchiveError(self._unsafe_state)
             workspace = self.runtime.export_workspace()
         except ArchiveError as error:
             self._verification = VerificationResult(
@@ -304,7 +308,11 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
 
     def _execute(self, action: ToolAction) -> str:
         if action.kind is ActionKind.CHECKPOINT:
-            return f"checkpoint {self.checkpoint()}"
+            try:
+                return f"checkpoint {self.checkpoint()}"
+            except ArchiveError as error:
+                self._unsafe_state = str(error)
+                return f"tool error: {error}"
         if action.kind is ActionKind.RESTORE:
             try:
                 state = self.checkpoints.load(

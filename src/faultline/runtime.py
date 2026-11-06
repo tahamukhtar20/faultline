@@ -13,7 +13,7 @@ from typing import Any
 
 from faultline.models import ActionKind, ToolAction
 from faultline.sandbox.archive import Tree
-from faultline.sandbox.docker import Container, Sandbox, docker, ensure_image
+from faultline.sandbox.docker import Container, Sandbox, capped, docker, ensure_image
 from faultline.scenarios import SCENARIOS_BY_NAME, run_scenario
 from faultline.stack import ServiceStack
 from faultline.taskgen import TaskInstance
@@ -43,7 +43,7 @@ class EpisodeRuntime:
         self.last_test_summary = "not run"
         self._sandbox = Sandbox(ensure_image())
         self._workspace = self._sandbox.volume("workspace")
-        self.stack = ServiceStack(self._sandbox, self._workspace, "live")
+        self.stack = ServiceStack(self._sandbox, self._workspace)
         self.solver: Container = self._sandbox.start(
             "solver",
             ["sleep", "infinity"],
@@ -76,6 +76,7 @@ class EpisodeRuntime:
             self.stack.stop_services()
             run_scenario(SCENARIOS_BY_NAME[name], self.stack)
         self.stack.provider.call("release")
+        self.stack.provider.call("open_entry")
         self.stack.provider.call("latency", seconds=0.0)
         self.stack.stop_services()
         self.start_services()
@@ -115,7 +116,7 @@ class EpisodeRuntime:
             )
         target = [match.group(1)] if match.group(1) else ["tests"]
         result = self.solver.text(
-            ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", *target],
+            capped(["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", *target]),
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
         if result.returncode in {124, 137}:
@@ -183,10 +184,11 @@ class EpisodeRuntime:
     def capture_state(self) -> tuple[Tree, Tree, dict[str, Any]]:
         """Stop the service, then read its files, so that the database is at rest."""
         self.stack.stop_services()
-        data = self._sandbox.read_volume(self.stack.data_volume)
-        state = self.export_workspace(), data, self.stack.ledger()
-        self.start_services()
-        return state
+        try:
+            data = self._sandbox.read_volume(self.stack.data_volume)
+            return self.export_workspace(), data, self.stack.ledger()
+        finally:
+            self.start_services()
 
     def restore_state(self, workspace: Tree, data: Tree, ledger: dict[str, Any]) -> None:
         self.stack.stop_services()

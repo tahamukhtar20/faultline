@@ -11,7 +11,7 @@ RUN useradd --uid 10001 --no-create-home --no-log-init sandbox \
     && mkdir /data /workspace \
     && chown sandbox /data /workspace
 
-COPY toolbox.py provider.py /opt/faultline/
+COPY toolbox.py provider.py crash_api.py /opt/faultline/
 
 USER sandbox
 WORKDIR /workspace

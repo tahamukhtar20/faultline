@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "faultline-rl"
+version = "0.1.0"
+description = "A reinforcement-learning environment for coding agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "gymnasium>=1.1,<2",
+  "numpy>=1.26",
+  "pydantic>=2.10,<3",
+  "pytest>=8.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.15",
+  "ruff>=0.11",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/faultline"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+strict = true
+exclude = ["src/faultline/worlds/orderflow/template/"]

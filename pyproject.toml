@@ -25,9 +25,7 @@ dev = [
   "mypy>=1.15",
   "ruff>=0.11",
 ]
-agents = [
-    "anthropic>=1",
-]
+agents = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/faultline"]

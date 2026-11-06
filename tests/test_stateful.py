@@ -9,7 +9,7 @@ from conftest import action, patch_action
 
 from faultline.checkpoints import CheckpointError
 from faultline.env import FaultlineEnv
-from faultline.models import ActionKind
+from faultline.models import ActionKind, ToolAction
 from faultline.taskgen import OrderflowTaskGenerator, TaskInstance
 
 pytestmark = pytest.mark.docker
@@ -30,7 +30,9 @@ def env() -> Iterator[FaultlineEnv]:
 def snapshot_view(environment: FaultlineEnv) -> dict[str, object]:
     observation = environment._last_observation_required()
     query = environment.runtime.execute(
-        action_model(ActionKind.QUERY, "SELECT order_id, status FROM orders ORDER BY order_id")
+        ToolAction(
+            kind=ActionKind.QUERY, argument="SELECT order_id, status FROM orders ORDER BY order_id"
+        )
     )
     return {
         "files": {
@@ -42,12 +44,6 @@ def snapshot_view(environment: FaultlineEnv) -> dict[str, object]:
         "steps": observation.remaining_steps,
         "verification": environment.verification.model_dump(),
     }
-
-
-def action_model(kind: ActionKind, argument: str = ""):
-    from faultline.models import ToolAction
-
-    return ToolAction(kind=kind, argument=argument)
 
 
 def test_snapshot_restore_is_state_equivalent(env: FaultlineEnv) -> None:

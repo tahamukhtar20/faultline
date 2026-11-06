@@ -240,6 +240,11 @@ def _volume_flag(target: str, source: str) -> str:
     return f"--volume={volume}:{target}" + (f":{mode}" if mode else "")
 
 
+def cleanup_command() -> None:
+    """Remove sandboxes left behind by crashed runs. Do not run this while episodes are active."""
+    remove_sandboxes()
+
+
 class ControlChannelError(RuntimeError):
     pass
 

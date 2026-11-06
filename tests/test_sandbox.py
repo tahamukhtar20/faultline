@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from faultline.runtime import EpisodeRuntime
-from faultline.sandbox.docker import Container, docker, remove_sandboxes
+from faultline.sandbox.docker import Container, Sandbox, docker, ensure_image, remove_sandboxes
 from faultline.taskgen import OrderflowTaskGenerator
 
 pytestmark = pytest.mark.docker
@@ -37,7 +37,8 @@ def run_python(container: Container, program: str, timeout: float = 20) -> str:
 
 CONNECT = """
 import socket
-for host, port in [("1.1.1.1", 53), ("8.8.8.8", 443), ("host.docker.internal", 22), ("172.17.0.1", 22)]:
+targets = [("1.1.1.1", 53), ("8.8.8.8", 443), ("host.docker.internal", 22), ("172.17.0.1", 22)]
+for host, port in targets:
     connection = socket.socket()
     connection.settimeout(2)
     try:
@@ -98,14 +99,9 @@ def test_service_can_reach_neither_the_internet_nor_the_host(runtime: EpisodeRun
     output = run_python(runtime.stack.api, CONNECT)
     assert "REACHED" not in output
     assert "done" in output
-    gateway = docker(
-        "network",
-        "inspect",
-        "--format",
-        "{{json .IPAM.Config}}",
-        runtime.stack.api.name.rsplit("-", 3)[0],
-    ).stdout.decode()
-    assert '"Gateway":"' not in gateway or "invalid" in gateway or '"Gateway":""' in gateway
+    network = json.loads(docker("network", "inspect", runtime._sandbox.network).stdout)[0]
+    assert network["Internal"] is True
+    assert network["Options"]["com.docker.network.bridge.inhibit_ipv4"] == "true"
 
 
 def test_service_cannot_control_the_ledger_over_the_network(runtime: EpisodeRuntime) -> None:
@@ -208,6 +204,14 @@ def test_closing_removes_every_resource() -> None:
     assert not docker("network", "ls", "-q", "--filter", selector).stdout.strip()
 
 
-def test_orphans_can_be_cleaned_up() -> None:
-    # Safe alongside other tests only with a scoped ID, so this removes a sandbox that never existed.
-    remove_sandboxes("does-not-exist")
+def test_leaked_resources_can_be_removed_later() -> None:
+    leaked = Sandbox(ensure_image())
+    volume = leaked.volume("leaked")
+    leaked.start("idle", ["sleep", "infinity"], mounts={"/data": volume})
+    selector = f"label=faultline.sandbox={leaked.sandbox_id}"
+
+    remove_sandboxes(leaked.sandbox_id)
+
+    assert not docker("ps", "-aq", "--filter", selector).stdout.strip()
+    assert not docker("volume", "ls", "-q", "--filter", selector).stdout.strip()
+    assert not docker("network", "ls", "-q", "--filter", selector).stdout.strip()

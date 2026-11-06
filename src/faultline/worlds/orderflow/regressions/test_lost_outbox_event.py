@@ -3,7 +3,7 @@ from orderflow import api, db
 
 
 def test_order_and_event_commit_together(client, monkeypatch) -> None:
-    class Crash(BaseException):
+    class Crash(Exception):
         pass
 
     def crash(name: str) -> None:

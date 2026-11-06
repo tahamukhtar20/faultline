@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePosixPath
 
 from faultline.models import ScenarioResult, VerificationResult
-from faultline.sandbox.archive import Tree, build_tar, tree_hash
+from faultline.sandbox.archive import FileEntry, Tree, build_tar, tree_hash
 from faultline.sandbox.docker import Sandbox, docker, ensure_image
 from faultline.scenarios import HIDDEN, PERFORMANCE, RESILIENCE, SCENARIOS, run_scenario
 from faultline.stack import ServiceStack
@@ -146,6 +146,28 @@ def verify_tree(instance: TaskInstance, tree: Tree) -> VerificationResult:
     with _cache_lock:
         _cache[key] = result
     return result
+
+
+def validate_instance(instance: TaskInstance) -> str:
+    """The solvability gate: faults must break the world and the gold patches must repair it.
+
+    Returns the reason a task is invalid, or an empty string if it may be used.
+    """
+    if verify_tree(instance, instance.files).success:
+        return "the injected faults do not fail verification"
+    repaired = dict(instance.files)
+    for patch in instance.gold_patches:
+        text = repaired[patch["path"]].data.decode()
+        if text.count(patch["old"]) != 1:
+            return f"a gold patch does not apply to {patch['path']}"
+        entry = repaired[patch["path"]]
+        repaired[patch["path"]] = FileEntry(
+            text.replace(patch["old"], patch["new"]).encode(), entry.mode
+        )
+    result = verify_tree(instance, repaired)
+    if not result.success:
+        return f"the gold patches do not pass verification: {list(result.failure_categories)}"
+    return ""
 
 
 def clear_cache() -> None:

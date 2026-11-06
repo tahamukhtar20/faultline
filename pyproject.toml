@@ -11,14 +11,22 @@ requires-python = ">=3.11"
 dependencies = [
   "gymnasium>=1.1,<2",
   "numpy>=1.26",
+  "pettingzoo>=1.24,<2",
   "pydantic>=2.10,<3",
   "pytest>=8.3",
 ]
+
+[project.scripts]
+faultline-benchmark = "faultline.benchmark:main"
+faultline-cleanup = "faultline.sandbox.docker:cleanup_command"
 
 [project.optional-dependencies]
 dev = [
   "mypy>=1.15",
   "ruff>=0.11",
+]
+agents = [
+    "anthropic>=1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -39,3 +47,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 strict = true
 exclude = ["src/faultline/worlds/"]
+
+[[tool.mypy.overrides]]
+module = "pettingzoo.*"
+ignore_missing_imports = true

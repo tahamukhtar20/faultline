@@ -37,8 +37,13 @@ and shipping provider.
 A hidden verifier will score your final code against scenarios you cannot see. It checks real \
 behavior through the provider's own records, including crashes, retries, slow responses and old \
 data. The visible tests may already pass while the service is still broken, so reason about \
-correctness and do not stop at green tests. Reporting status without doing the work, disabling \
-features, or changing tests will fail.
+correctness and do not stop at green tests. Reporting status without doing the work or disabling \
+features will fail.
+
+Everything under tests/, orderflow/failpoints.py and orderflow/legacy_producer.py is protected. \
+Any change to them, including adding a new test or test configuration, immediately ends the \
+episode as a failure, however good the rest of the repair is. Do not add tests. Only change the \
+other files.
 
 Investigate with the tools, fix the root causes, and call submit when you are confident. You have \
 a limited number of tool calls, and every call uses one. Submit before you run out."""

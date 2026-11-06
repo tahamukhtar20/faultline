@@ -208,17 +208,19 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, default=3)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--out", type=Path, default=Path("reports"))
-    parser.add_argument("--model", default=None, help="Claude model for the 'claude' policy")
-    parser.add_argument("--effort", default="high", help="Effort for the 'claude' policy")
+    parser.add_argument("--model", default=None, help="Model for the 'claude-code' policy")
+    parser.add_argument("--effort", default="high", help="Effort for the 'claude-code' policy")
     args = parser.parse_args()
 
     policies: dict[str, Policy] = {}
     for name in args.policies.split(","):
-        if name == "claude":
-            from faultline.claude_agent import DEFAULT_MODEL, make_claude_policy
+        if name == "claude-code":
+            from faultline.claude_code import DEFAULT_MODEL, make_claude_code_policy
 
             model = args.model or DEFAULT_MODEL
-            policies[f"claude:{model}"] = make_claude_policy(model=model, effort=args.effort)
+            policies[f"claude-code-{model}"] = make_claude_code_policy(
+                model=model, effort=args.effort, usage_log=args.out / "agent_usage.jsonl"
+            )
         else:
             policies[name] = POLICIES[name]
 

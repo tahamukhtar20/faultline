@@ -97,6 +97,19 @@ Any time limit a scenario enforces is stated in the issue: orders held by a cras
 
 Shaped rewards are the change in a potential over these scores. Any path that returns to the same state therefore nets to zero, which is why repairing, restoring and repairing again cannot farm reward.
 
+## Other benchmark formats
+
+Harbor, Inspect AI and Verifiers run an agent in one container and grade in another, with no Docker socket for starting scenario stacks. [`faultline.grader`](../src/faultline/grader) runs the same nine scenarios there using plain processes:
+
+- Scenarios run one at a time on fixed ports, each under its own unprivileged user, so one scenario's leftovers cannot reach the next.
+- A root [supervisor](../src/faultline/sandbox/supervisor.py) wraps each service. It is a child subreaper, so it can find and kill everything the service spawned, the way a container's init would. Killing it is the grader's equivalent of `SIGKILL`ing a container.
+- `/tests` and the results directory are closed to the scenario users, and process and file-size limits apply.
+- The agent's work arrives as a tar of `/app`. Links and anything else that is not a plain file are rejected, and if the grader itself fails, it exits with an error and writes no reward, so a broken run cannot read as a score.
+
+This is weaker isolation than the Docker verifier, and the provider sidecar the agent talks to is a separate development copy. Its ledger never reaches the grader, which starts its own.
+
+These formats score 1.0 or 0.0. Each fault breaks only some scenarios, so partial credit would pay about 0.46 for submitting the broken code unchanged. [`exporters/harbor.py`](../src/faultline/exporters/harbor.py) writes the task directory that the Inspect and Verifiers integrations also build on, and it pins the Python image by digest and service dependencies from the sandbox's Dockerfile. OpenEnv is different: [`integrations/openenv`](../integrations/openenv) wraps the Gymnasium environment directly, so it keeps structured actions, shaped rewards and the Docker verifier.
+
 ## Checkpoints
 
 A checkpoint is a versioned JSON manifest plus content-addressed blobs, covering the workspace, the database, the provider's ledger, and the controller state. Its ID is the hash of the manifest, and every blob is verified on load, so tampering or corruption fails closed. Branches share the blobs they have in common.

@@ -4,7 +4,9 @@ The agent works in the `default` service, beside the provider sidecar, on a netw
 out. The scorer carries a tar of /app to the `grader` service, which holds the private scenarios,
 has no network, and refuses anything in the archive that is not a plain file.
 
-    inspect eval faultline/orderflow --model anthropic/claude-sonnet-4-5 -T levels=1,2 -T seeds=1
+    inspect eval src/faultline/exporters/inspect_task.py@orderflow \
+        --model anthropic/claude-haiku-5-5 \
+        -T levels=1,2 -T seeds=1
 """
 
 from __future__ import annotations

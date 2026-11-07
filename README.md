@@ -131,7 +131,7 @@ The Harbor, Inspect and Verifiers formats give the agent a real shell and score 
 | [Verifiers](https://github.com/PrimeIntellect-ai/verifiers) | Harbor task through its runtime | Levels 1, 3 and 5: reference repair valid, no change scores 0.0 |
 | [OpenEnv](https://github.com/meta-pytorch/OpenEnv) | The Gymnasium actions over HTTP | Static validation, reference repair and no-change tests over the protocol |
 
-Only the Gymnasium environment has been run with a real model so far. The shell formats have no incident replay or noisy log action, so their scores are not comparable to the table above.
+On Harbor, Claude Haiku 5.5 through Harbor's `claude-code` agent solved one seed of each level, 5/5, in 1 to 10 minutes of agent time each. The results are in [`reports/harbor`](reports/harbor). The shell formats have no incident replay or noisy log action, so their scores are not comparable to the Gymnasium table above.
 
 ### Harbor
 
@@ -150,6 +150,8 @@ harbor run -p harbor-tasks -a oracle -n 3
 ```bash
 harbor run -p harbor-tasks -a claude-code -m anthropic/claude-haiku-5-5
 ```
+
+The `claude-code` agent reads `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. Harbor installs Node and Claude Code in every task container, which can take longer than its six-minute setup limit on a slow connection. If it does, raise the limit with `--agent-setup-timeout-multiplier`, or build the environment from an image that already has `claude` on its `PATH`, which Harbor then uses as it is.
 
 ### Inspect AI
 

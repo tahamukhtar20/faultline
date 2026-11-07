@@ -193,3 +193,42 @@ def test_a_correct_repair_that_writes_at_startup_passes(
     )
 
     assert grade(grader_image, tree, tmp_path)["success"]
+
+
+_PROBE = """
+import socket, time, urllib.error, urllib.request
+for _ in range(50):
+    try:
+        socket.create_connection(("localhost", 8100), 1).close()
+        break
+    except OSError:
+        time.sleep(0.1)
+try:
+    print(urllib.request.urlopen("http://localhost:8100/ledger").status)
+except urllib.error.HTTPError as error:
+    print(error.code)
+"""
+
+
+def test_the_agents_provider_offers_nothing_the_grader_lacks(
+    task: TaskInstance, tmp_path: Path
+) -> None:
+    """Code that relied on a development-only endpoint would fail grading for the wrong reason."""
+    directory = export_task(task, tmp_path / "task")
+    assert sorted(p.name for p in (directory / "environment" / "provider").iterdir()) == [
+        "Dockerfile",
+        "provider.py",
+    ]
+    tag = f"faultline-provider-test:{task.manifest.task_id}"
+    docker(
+        "build", "--quiet", "--tag", tag, str(directory / "environment" / "provider"), timeout=900
+    )
+    name = f"faultline-provider-test-{task.manifest.task_id}"
+    try:
+        docker("run", "--detach", "--rm", "--network", "none", "--name", name, tag)
+        status = docker("exec", name, "python", "-c", _PROBE, timeout=30).stdout.decode().strip()
+    finally:
+        docker("rm", "--force", name, check=False)
+        docker("image", "rm", "--force", tag, check=False)
+
+    assert status != "200"

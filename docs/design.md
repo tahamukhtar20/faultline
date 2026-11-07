@@ -106,7 +106,7 @@ Harbor, Inspect AI and Verifiers run an agent in one container and grade in anot
 - `/tests` and the results directory are closed to the scenario users, and process and file-size limits apply.
 - The agent's work arrives as a tar of `/app`. Links and anything else that is not a plain file are rejected, and if the grader itself fails, it exits with an error and writes no reward, so a broken run cannot read as a score.
 
-This is weaker isolation than the Docker verifier, and the provider sidecar the agent talks to is a separate development copy. Its ledger never reaches the grader, which starts its own.
+This is weaker isolation than the Docker verifier. The provider sidecar the agent works against runs the grader's provider code without its control channel, so it serves exactly the API the grader does. An earlier version added a debugging endpoint to the agent's copy, and agents built repairs on it that then failed under grading for reasons unrelated to the faults. The sidecar's ledger never reaches the grader, which starts its own.
 
 These formats score 1.0 or 0.0. Each fault breaks only some scenarios, so partial credit would pay about 0.46 for submitting the broken code unchanged. [`exporters/harbor.py`](../src/faultline/exporters/harbor.py) writes the task directory that the Inspect and Verifiers integrations also build on, and it pins the Python image by digest and service dependencies from the sandbox's Dockerfile. OpenEnv is different: [`integrations/openenv`](../integrations/openenv) wraps the Gymnasium environment directly, so it keeps structured actions, shaped rewards and the Docker verifier.
 

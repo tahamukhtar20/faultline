@@ -21,7 +21,6 @@ from faultline.verifiers import count_public_tests
 PYTHON_IMAGE = (
     "python:3.13-slim@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc"
 )
-_PROVIDER_DIR = Path(__file__).parent / "provider"
 # Everything the grader imports. An exported task must work with nothing else installed.
 _GRADER_FILES = (
     "__init__.py",
@@ -59,7 +58,7 @@ python -m orderflow.worker
 Data lives in `/data`. Delete `/data/orders.db*` for a clean start.
 
 The payment and shipping provider is running at `http://provider:8100`. It takes `POST /charges`
-and `POST /shipments`, and `GET /ledger` shows every charge and shipment it has recorded.
+and `POST /shipments`.
 
 Public tests run with `python -m pytest tests` from `/app`.
 
@@ -130,17 +129,19 @@ services:
         - CMD
         - python
         - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8100/ledger')
+        - import socket; socket.create_connection(('localhost', 8100), 1)
       interval: 1s
       retries: 30
 """
 
+# The grader's provider, serving the same HTTP API. Only its stdin control channel is left out.
 _PROVIDER_DOCKERFILE = """\
 FROM {image}
 
-COPY provider.py dev_provider.py /opt/provider/
+COPY provider.py /opt/provider/
 WORKDIR /opt/provider
-CMD ["python", "dev_provider.py"]
+CMD ["python", "-c", "from http.server import ThreadingHTTPServer; from provider import PORT, \\
+Handler; ThreadingHTTPServer(('0.0.0.0', PORT), Handler).serve_forever()"]
 """
 
 _VERIFIER_DOCKERFILE = """\
@@ -206,10 +207,6 @@ def _write_environment(directory: Path, instance: TaskInstance) -> None:
         _PROVIDER_DOCKERFILE.format(image=PYTHON_IMAGE),
     )
     _write(directory / "provider" / "provider.py", (BUILD_CONTEXT / "provider.py").read_bytes())
-    _write(
-        directory / "provider" / "dev_provider.py",
-        (_PROVIDER_DIR / "dev_provider.py").read_bytes(),
-    )
 
 
 def _write_tests(directory: Path, instance: TaskInstance) -> None:

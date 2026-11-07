@@ -46,7 +46,7 @@ services:
         - CMD
         - python
         - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8100/ledger')
+        - import socket; socket.create_connection(('localhost', 8100), 1)
       interval: 1s
       retries: 30
   grader:

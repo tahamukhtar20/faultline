@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "faultline-verifiers"
+version = "0.1.0"
+description = "Faultline tasks as a Verifiers taskset"
+requires-python = ">=3.12"
+dependencies = [
+  "faultline-rl",
+  "verifiers[harbor]>=0.4.1",
+]
+
+[tool.uv.sources]
+faultline-rl = { path = "../..", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/faultline_verifiers"]

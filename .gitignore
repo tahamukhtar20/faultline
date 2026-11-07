@@ -11,3 +11,4 @@ internal/
 harbor-tasks/
 jobs/
 logs/
+*.egg-info/

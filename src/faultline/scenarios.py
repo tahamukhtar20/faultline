@@ -12,8 +12,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from faultline.models import ScenarioResult
-from faultline.sandbox.docker import ControlChannelError, DockerError
-from faultline.stack import ServiceStack
+from faultline.sandbox.errors import ControlChannelError, DockerError
+from faultline.service_stack import BaseStack
 
 HIDDEN = "hidden_invariants"
 RESILIENCE = "resilience"
@@ -39,7 +39,7 @@ def _new_order() -> tuple[str, int]:
     return f"order-{secrets.token_hex(8)}", 100 + secrets.randbelow(9_900)
 
 
-def _post_order(stack: ServiceStack, order_id: str, amount: int, currency: str = "USD") -> None:
+def _post_order(stack: BaseStack, order_id: str, amount: int, currency: str = "USD") -> None:
     reply = stack.request(
         "POST", "/orders", {"order_id": order_id, "amount_cents": amount, "currency": currency}
     )
@@ -47,7 +47,7 @@ def _post_order(stack: ServiceStack, order_id: str, amount: int, currency: str =
         raise ScenarioFailure("api_error", f"POST /orders returned {reply}")
 
 
-def _start(stack: ServiceStack, workers: int = 1) -> None:
+def _start(stack: BaseStack, workers: int = 1) -> None:
     stack.start_api()
     if not stack.wait_ready():
         raise ScenarioFailure("startup_failure", "the API did not become healthy")
@@ -55,7 +55,7 @@ def _start(stack: ServiceStack, workers: int = 1) -> None:
         stack.start_worker()
 
 
-def _require_status(stack: ServiceStack, order_id: str, status: str, timeout: float) -> None:
+def _require_status(stack: BaseStack, order_id: str, status: str, timeout: float) -> None:
     if not stack.wait_for_status(order_id, status, timeout):
         raise ScenarioFailure(
             "order_not_completed",
@@ -63,7 +63,7 @@ def _require_status(stack: ServiceStack, order_id: str, status: str, timeout: fl
         )
 
 
-def _require_settled(stack: ServiceStack, order_id: str, amount: int) -> None:
+def _require_settled(stack: BaseStack, order_id: str, amount: int) -> None:
     """Check the provider's own records: one capture of the right amount and one parcel."""
     captures = stack.captures(order_id)
     if len(captures) > 1:
@@ -81,7 +81,7 @@ def _require_settled(stack: ServiceStack, order_id: str, amount: int) -> None:
         raise ScenarioFailure("not_shipped", "the provider has no shipment for this order")
 
 
-def _wait_for_capture(stack: ServiceStack, order_id: str, timeout: float) -> None:
+def _wait_for_capture(stack: BaseStack, order_id: str, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if stack.captures(order_id):
@@ -90,7 +90,7 @@ def _wait_for_capture(stack: ServiceStack, order_id: str, timeout: float) -> Non
     raise ScenarioFailure("not_charged", "no payment was attempted")
 
 
-def _wait_for_charge_call(stack: ServiceStack, timeout: float) -> None:
+def _wait_for_charge_call(stack: BaseStack, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if stack.ledger()["charge_calls"]:
@@ -99,13 +99,13 @@ def _wait_for_charge_call(stack: ServiceStack, timeout: float) -> None:
     raise ScenarioFailure("not_charged", "no payment was attempted")
 
 
-def _restart_everything(stack: ServiceStack) -> None:
+def _restart_everything(stack: BaseStack) -> None:
     """Kill the API and every worker, wherever the agent's code chose to do its work."""
     stack.stop_services()
     _start(stack)
 
 
-def crash_after_charge(stack: ServiceStack) -> None:
+def crash_after_charge(stack: BaseStack) -> None:
     """Everything is killed after the payment and before the event is acknowledged."""
     _start(stack)
     order_id, amount = _new_order()
@@ -119,7 +119,7 @@ def crash_after_charge(stack: ServiceStack) -> None:
     _require_settled(stack, order_id, amount)
 
 
-def crash_before_charge(stack: ServiceStack) -> None:
+def crash_before_charge(stack: BaseStack) -> None:
     """Everything is killed before the payment lands, so the redelivery must still charge."""
     _start(stack)
     order_id, amount = _new_order()
@@ -132,7 +132,7 @@ def crash_before_charge(stack: ServiceStack) -> None:
     _require_settled(stack, order_id, amount)
 
 
-def charge_response_lost(stack: ServiceStack) -> None:
+def charge_response_lost(stack: BaseStack) -> None:
     """The payment succeeds but the response times out, so a retry must not charge again."""
     _start(stack)
     order_id, amount = _new_order()
@@ -142,7 +142,7 @@ def charge_response_lost(stack: ServiceStack) -> None:
     _require_settled(stack, order_id, amount)
 
 
-def transient_payment_failure(stack: ServiceStack) -> None:
+def transient_payment_failure(stack: BaseStack) -> None:
     """The provider fails twice and then recovers, so the order must still go through once."""
     _start(stack)
     order_id, amount = _new_order()
@@ -152,7 +152,7 @@ def transient_payment_failure(stack: ServiceStack) -> None:
     _require_settled(stack, order_id, amount)
 
 
-def crash_during_create(stack: ServiceStack) -> None:
+def crash_during_create(stack: BaseStack) -> None:
     """The API dies before a second commit. An order must be all there or not there at all."""
     stack.start_api(crash_test=True)
     if not stack.wait_ready():
@@ -184,7 +184,7 @@ def crash_during_create(stack: ServiceStack) -> None:
     _require_settled(stack, order_id, amount)
 
 
-def poison_queue(stack: ServiceStack) -> None:
+def poison_queue(stack: BaseStack) -> None:
     """Rejected and permanently failing orders must fail, without holding up the orders behind."""
     _start(stack)
     rejected, rejected_amount = _new_order()
@@ -207,7 +207,7 @@ def poison_queue(stack: ServiceStack) -> None:
             raise ScenarioFailure("double_fulfilment", "an unpaid order was shipped")
 
 
-def rolling_upgrade(stack: ServiceStack) -> None:
+def rolling_upgrade(stack: BaseStack) -> None:
     """Events from the previous release and the current one are processed side by side."""
     _start(stack)
     legacy, legacy_amount = _new_order()
@@ -229,7 +229,7 @@ def rolling_upgrade(stack: ServiceStack) -> None:
     _require_settled(stack, legacy, legacy_amount)
 
 
-def lease_race(stack: ServiceStack) -> None:
+def lease_race(stack: BaseStack) -> None:
     """With a slow provider and two workers, each order is still processed exactly once.
 
     The API is stopped once the orders are in, so this work has to happen in the workers.
@@ -256,7 +256,7 @@ def lease_race(stack: ServiceStack) -> None:
         _require_settled(stack, order_id, amount)
 
 
-def throughput(stack: ServiceStack) -> None:
+def throughput(stack: BaseStack) -> None:
     """A burst of orders finishes within budget, and the API stays responsive."""
     _start(stack)
     orders = [_new_order() for _ in range(_THROUGHPUT_ORDERS)]
@@ -287,7 +287,7 @@ def throughput(stack: ServiceStack) -> None:
 class Scenario:
     name: str
     component: str
-    run: Callable[[ServiceStack], None]
+    run: Callable[[BaseStack], None]
 
 
 SCENARIOS: tuple[Scenario, ...] = (
@@ -304,7 +304,7 @@ SCENARIOS: tuple[Scenario, ...] = (
 SCENARIOS_BY_NAME = {scenario.name: scenario for scenario in SCENARIOS}
 
 
-def run_scenario(scenario: Scenario, stack: ServiceStack) -> ScenarioResult:
+def run_scenario(scenario: Scenario, stack: BaseStack) -> ScenarioResult:
     try:
         scenario.run(stack)
     except ScenarioFailure as failure:

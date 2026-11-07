@@ -13,9 +13,6 @@ from faultline.models import Difficulty, TaskManifest
 from faultline.sandbox.archive import FileEntry, Tree
 
 WORLD_ROOT = Path(__file__).parent / "worlds" / "orderflow"
-FORBIDDEN_NAMES = frozenset(
-    {"conftest.py", "pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "sitecustomize.py"}
-)
 _ALWAYS_PROTECTED = ("orderflow/legacy_producer.py",)
 
 # Seeded renames, so an agent cannot rely on memorized identifiers or patches.

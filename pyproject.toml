@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 faultline-benchmark = "faultline.benchmark:main"
+faultline-export-harbor = "faultline.exporters.harbor:main"
 faultline-cleanup = "faultline.sandbox.docker:cleanup_command"
 
 [project.optional-dependencies]
@@ -43,7 +44,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
 strict = true
-exclude = ["src/faultline/worlds/"]
+exclude = ["src/faultline/worlds/", "src/faultline/exporters/provider/"]
 
 [[tool.mypy.overrides]]
 module = ["orderflow.*", "pettingzoo.*", "uvicorn"]

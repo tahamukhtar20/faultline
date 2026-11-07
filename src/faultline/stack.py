@@ -1,13 +1,11 @@
-"""A running copy of the order service: API, workers and the provider sidecar."""
+"""A running copy of the order service in containers: API, workers and the provider sidecar."""
 
 from __future__ import annotations
 
-import json
 import secrets
-import time
-from typing import Any
 
 from faultline.sandbox.docker import Container, Provider, Sandbox
+from faultline.service_stack import BaseStack
 
 _API_PORT = 8000
 _API_COMMAND = [
@@ -26,7 +24,7 @@ _CRASH_TEST_API_COMMAND = ["python", "/opt/faultline/crash_api.py"]
 _WORKER_COMMAND = ["python", "-m", "orderflow.worker"]
 
 
-class ServiceStack:
+class ServiceStack(BaseStack):
     def __init__(self, sandbox: Sandbox, workspace_volume: str):
         self._sandbox = sandbox
         # Container names are visible to agent code, so they must not reveal what is being tested.
@@ -35,7 +33,7 @@ class ServiceStack:
         self._workspace = workspace_volume
         self._serial = 0
         self.data_volume = sandbox.volume(f"{prefix}-data")
-        self.provider = Provider(sandbox, f"{prefix}-provider")
+        self.provider: Provider = Provider(sandbox, f"{prefix}-provider")
         self.api: Container | None = None
         self.workers: list[Container] = []
         self.retired_logs: dict[str, list[str]] = {"api": [], "worker": []}
@@ -78,57 +76,9 @@ class ServiceStack:
         for worker in list(self.workers):
             self.kill_worker(worker)
 
-    def request(
-        self, method: str, path: str, body: Any = None, timeout: float = 5
-    ) -> dict[str, Any]:
+    def _api_url(self, path: str) -> str:
         assert self.api is not None
-        return self.provider.call(
-            "request",
-            url=f"http://{self.api.name}:{_API_PORT}{path}",
-            method=method,
-            json=body,
-            request_timeout=timeout,
-            timeout=timeout + 5,
-        )
-
-    def wait_ready(self, timeout: float = 15) -> bool:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.api is None or not self.api.is_running():
-                return False
-            if self.request("GET", "/health", timeout=1).get("status") == 200:
-                return True
-            time.sleep(0.05)
-        return False
-
-    def order_status(self, order_id: str) -> str | None:
-        reply = self.request("GET", f"/orders/{order_id}")
-        if reply.get("status") != 200:
-            return None
-        try:
-            status = json.loads(reply["text"]).get("status")
-        except (ValueError, AttributeError):
-            return None
-        return status if isinstance(status, str) else None
-
-    def wait_for_status(self, order_id: str, wanted: str, timeout: float) -> bool:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.order_status(order_id) == wanted:
-                return True
-            time.sleep(0.05)
-        return False
-
-    def ledger(self) -> dict[str, Any]:
-        return self.provider.call("ledger")
-
-    def captures(self, order_id: str) -> list[dict[str, Any]]:
-        return [
-            charge for charge in self.ledger()["charges"].values() if charge["order_id"] == order_id
-        ]
-
-    def shipments(self, order_id: str) -> int:
-        return sum(1 for shipped in self.ledger()["shipments"] if shipped == order_id)
+        return f"http://{self.api.name}:{_API_PORT}{path}"
 
     def close(self) -> None:
         self.provider.close()

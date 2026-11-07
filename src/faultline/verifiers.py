@@ -6,14 +6,14 @@ import re
 import secrets
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import PurePosixPath
 
+from faultline.integrity import public_score, violations
 from faultline.models import ScenarioResult, VerificationResult
 from faultline.sandbox.archive import FileEntry, Tree, tree_hash
 from faultline.sandbox.docker import Sandbox, capped, docker, ensure_image
 from faultline.scenarios import HIDDEN, PERFORMANCE, RESILIENCE, SCENARIOS, run_scenario
 from faultline.stack import ServiceStack
-from faultline.taskgen import FORBIDDEN_NAMES, TaskInstance, sha256_bytes
+from faultline.taskgen import TaskInstance
 
 PUBLIC_TIMEOUT_SECONDS = 60
 _REPORT_MARKER = "=====faultline-report====="
@@ -28,27 +28,11 @@ _cache_lock = threading.Lock()
 
 
 def integrity_violations(instance: TaskInstance, tree: Tree) -> list[str]:
-    """Protected files must be untouched, and nothing may add test configuration."""
-    violations = [
-        f"protected file changed: {path}"
-        for path, expected in instance.protected_hashes.items()
-        if path not in tree or sha256_bytes(tree[path].data) != expected
-    ]
-    violations.extend(
-        f"forbidden file added: {path}"
-        for path in tree
-        if path not in instance.protected_hashes
-        and (PurePosixPath(path).name in FORBIDDEN_NAMES or PurePosixPath(path).parts[0] == "tests")
-    )
-    return violations
+    return violations(instance.protected_hashes, {path: entry.data for path, entry in tree.items()})
 
 
 def _public_tests(sandbox: Sandbox, volume: str, expected: int) -> tuple[float, str]:
-    """Run the protected tests and require a complete report, not only a clean exit code.
-
-    A patch can make the process exit early with status 0, so every expected test must be reported
-    as having run and passed. The output is capped, because this runs agent code.
-    """
+    """Run the protected tests. The output is capped, because this runs agent code."""
     report = "/tmp/public-report.xml"
     script = (
         f"python -m pytest -q -p no:cacheprovider --junitxml={report} tests; "
@@ -68,19 +52,10 @@ def _public_tests(sandbox: Sandbox, volume: str, expected: int) -> tuple[float, 
     )
     output = completed.stdout.decode(errors="replace")
     summary, _, report_text = output.partition(_REPORT_MARKER)
-    counts = {
-        name: int(value)
-        for name, value in re.findall(r'\b(tests|failures|errors|skipped)="(\d+)"', report_text)
-    }
-    passed = (
-        completed.returncode == 0
-        and counts.get("tests") == expected
-        and not any(counts.get(name, 1) for name in ("failures", "errors", "skipped"))
-    )
-    return (1.0 if passed else 0.0, summary[-2_000:])
+    return public_score(completed.returncode, report_text, expected), summary[-2_000:]
 
 
-def _count_tests(instance: TaskInstance) -> int:
+def count_public_tests(instance: TaskInstance) -> int:
     return sum(
         len(re.findall(r"^def test_", instance.files[path].data.decode(), re.MULTILINE))
         + _parameter_count(instance.files[path].data.decode())
@@ -112,8 +87,8 @@ def _fraction(results: list[ScenarioResult], component: str) -> float:
 
 
 def verify_tree(instance: TaskInstance, tree: Tree) -> VerificationResult:
-    violations = integrity_violations(instance, tree)
-    if violations:
+    found = integrity_violations(instance, tree)
+    if found:
         return VerificationResult(
             public_behavior=0,
             hidden_invariants=0,
@@ -121,7 +96,7 @@ def verify_tree(instance: TaskInstance, tree: Tree) -> VerificationResult:
             performance=0,
             integrity_ok=False,
             critical_invariants_ok=False,
-            diagnostics=tuple(violations),
+            diagnostics=tuple(found),
         )
 
     key = tree_hash(tree)
@@ -135,7 +110,7 @@ def verify_tree(instance: TaskInstance, tree: Tree) -> VerificationResult:
         volume = sandbox.volume("workspace")
         sandbox.write_volume(volume, tree)
         with ThreadPoolExecutor(max_workers=len(SCENARIOS) + 1) as pool:
-            public = pool.submit(_public_tests, sandbox, volume, _count_tests(instance))
+            public = pool.submit(_public_tests, sandbox, volume, count_public_tests(instance))
             futures = [
                 pool.submit(_run_one, sandbox, volume, index) for index in range(len(SCENARIOS))
             ]

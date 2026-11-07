@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from faultline.sandbox.archive import ArchiveError, Tree, build_tar, read_tar
+from faultline.sandbox.errors import ControlChannelError, DockerError
 
 BUILD_CONTEXT = Path(__file__).parent
 _BUILD_FILES = ("Dockerfile", "provider.py", "toolbox.py", "crash_api.py")
@@ -42,10 +43,6 @@ _HARDENING = (
     "--log-opt=compress=false",
 )
 MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024
-
-
-class DockerError(RuntimeError):
-    pass
 
 
 def docker(
@@ -285,10 +282,6 @@ def _volume_flag(target: str, source: str) -> str:
 def cleanup_command() -> None:
     """Remove sandboxes left behind by crashed runs. Do not run this while episodes are active."""
     remove_sandboxes()
-
-
-class ControlChannelError(RuntimeError):
-    pass
 
 
 class Provider:

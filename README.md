@@ -229,3 +229,7 @@ with FaultlineClient(base_url="http://127.0.0.1:8000", message_timeout_s=300).sy
 - **Known gaps in the Docker verifier.** Agent code can detect the crash-test process, and stacks in one verification share a network. IPv6 traffic is not traced. A comment-only edit can re-roll a flaky result.
 - **Non-deterministic logs.** Log text holds timestamps and container names, so observations can differ between runs.
 - **Verifiers.** It needs the Compose trust flag, and was checked locally on levels 1, 3 and 5.
+
+## License
+
+[MIT](LICENSE)

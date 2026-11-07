@@ -7,6 +7,7 @@ name = "openenv-faultline_env"
 version = "0.1.0"
 description = "Faultline as an OpenEnv environment"
 requires-python = ">=3.11"
+license = "MIT"
 dependencies = [
   "faultline-rl",
   "openenv>=0.12",

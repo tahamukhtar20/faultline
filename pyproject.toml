@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "A reinforcement-learning environment for coding agents"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
 dependencies = [
   "gymnasium>=1.1,<2",
   "numpy>=1.26",

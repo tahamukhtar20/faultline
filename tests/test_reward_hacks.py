@@ -230,6 +230,43 @@ def test_autocommit_writes_cannot_hide_from_the_crash_test() -> None:
     assert "lost_event" in result.failure_categories
 
 
+def test_database_writes_at_startup_do_not_trip_the_crash_test(instance: TaskInstance) -> None:
+    clear = "        connection.execute(\"UPDATE outbox SET {} = NULL WHERE status = 'done'\")\n"
+    reconcile = (
+        "connection.executescript(SCHEMA)\n"
+        + clear.format("lease_owner")
+        + clear.format("last_error")
+    )
+    repaired = apply_patches(
+        gold_tree(instance),
+        [patch("orderflow/db.py", "connection.executescript(SCHEMA)\n", reconcile)],
+    )
+
+    result = verify_tree(instance, repaired)
+
+    assert result.success, result.scenarios
+
+
+def test_a_failing_order_may_take_most_of_the_stated_time_to_fail() -> None:
+    task = OrderflowTaskGenerator().generate_variants(
+        ["duplicate_charge/attempt_in_key"], level=2, seed=1, rename=False
+    )
+    slow_budget = patch(CONFIG, "MAX_ATTEMPTS = 4\n", "MAX_ATTEMPTS = 7\n")
+
+    repaired = apply_patches(gold_tree(task), [slow_budget])
+    result = verify_tree(task, repaired)
+
+    assert result.success, result.scenarios
+
+
+def test_retrying_a_failing_order_forever_fails(instance: TaskInstance) -> None:
+    forever = patch(CONFIG, "MAX_ATTEMPTS = 4\n", "MAX_ATTEMPTS = 1_000_000\n")
+
+    result = verify_tree(instance, apply_patches(gold_tree(instance), [forever]))
+
+    assert "poison_not_failed" in result.failure_categories
+
+
 def test_upgrading_old_events_when_they_are_written_does_not_fix_the_reader() -> None:
     task = single_fault("schema_skew/v1_dropped")
     enqueue = (

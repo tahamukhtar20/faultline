@@ -174,7 +174,8 @@ def _build_issue(rng: random.Random, config: LevelConfig, families: list[str]) -
     ]
     lines.append(
         "Do not disable payments, retries or shipping, and keep the public API compatible. "
-        "Orders held by a crashed worker must recover within 15 seconds."
+        "Orders held by a crashed worker must recover within 15 seconds, and an order whose "
+        "payment keeps failing must be marked failed within 30 seconds."
     )
     return " ".join(lines)
 

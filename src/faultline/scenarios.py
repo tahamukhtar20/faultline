@@ -22,6 +22,8 @@ PERFORMANCE = "performance"
 _CRITICAL_CATEGORIES = frozenset(
     {"duplicate_charge", "phantom_charge", "wrong_amount", "double_fulfilment"}
 )
+# The issue promises 30 seconds. The extra margin is for a busy machine, not for the agent.
+_FAILED_DEADLINE_SECONDS = 35.0
 _THROUGHPUT_ORDERS = 20
 _THROUGHPUT_BUDGET_SECONDS = 10.0
 _API_LATENCY_BUDGET_SECONDS = 0.5
@@ -188,6 +190,7 @@ def poison_queue(stack: ServiceStack) -> None:
     rejected, rejected_amount = _new_order()
     failing, failing_amount = _new_order()
     stack.provider.call("fail_charges", order_id=failing, times=10_000)
+    deadline = time.monotonic() + _FAILED_DEADLINE_SECONDS
     _post_order(stack, rejected, rejected_amount, currency="XXX")
     _post_order(stack, failing, failing_amount)
     healthy = [_new_order() for _ in range(3)]
@@ -198,7 +201,7 @@ def poison_queue(stack: ServiceStack) -> None:
             raise ScenarioFailure("blocked_queue", "healthy orders are stuck behind failing ones")
         _require_settled(stack, order_id, amount)
     for order_id in (rejected, failing):
-        if not stack.wait_for_status(order_id, "failed", 10):
+        if not stack.wait_for_status(order_id, "failed", max(deadline - time.monotonic(), 0.1)):
             raise ScenarioFailure("poison_not_failed", "an undeliverable order never failed")
         if stack.shipments(order_id):
             raise ScenarioFailure("double_fulfilment", "an unpaid order was shipped")

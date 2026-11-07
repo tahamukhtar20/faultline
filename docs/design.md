@@ -93,6 +93,8 @@ Nine private scenarios run in parallel, each on its own stack with random order 
 
 Duplicate charges, charges for missing orders, wrong amounts and duplicate shipments are critical: no other score can make up for them. Crashes are real `SIGKILL`s of containers, so agent code cannot intercept them. The order-creation crash test sits outside the agent's code and fires on the database's own commit statements, so it cannot be moved. The public test score needs a complete report of every expected test, not only a clean exit code.
 
+Any time limit a scenario enforces is stated in the issue: orders held by a crashed worker recover within 15 seconds, and an order whose payment keeps failing is marked failed within 30. The crash test also starts counting commits only once an order request arrives, so database work at startup is not mistaken for a half-written order.
+
 Shaped rewards are the change in a potential over these scores. Any path that returns to the same state therefore nets to zero, which is why repairing, restoring and repairing again cannot farm reward.
 
 ## Checkpoints

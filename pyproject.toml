@@ -21,10 +21,16 @@ faultline-benchmark = "faultline.benchmark:main"
 faultline-export-harbor = "faultline.exporters.harbor:main"
 faultline-cleanup = "faultline.sandbox.docker:cleanup_command"
 
+[project.entry-points.inspect_ai]
+faultline = "faultline.exporters.inspect_task"
+
 [project.optional-dependencies]
 dev = [
   "mypy>=1.15",
   "ruff>=0.11",
+]
+inspect = [
+  "inspect-ai>=0.3.288",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -85,7 +85,8 @@ def test_the_injected_fault_fails(task: TaskInstance, grader_image: str, tmp_pat
 
     assert not result["success"]
     assert "duplicate_charge" in result["failure_categories"]
-    assert result["reward"] < 0.6
+    assert result["reward"] == 0.0
+    assert result["hidden_invariants"] < 1.0
 
 
 def test_changing_a_protected_test_earns_nothing(

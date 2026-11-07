@@ -22,8 +22,7 @@ from faultline.grader.stack import (
 )
 from faultline.integrity import public_score, violations
 from faultline.models import ScenarioResult, VerificationResult
-from faultline.rewards import RewardEngine
-from faultline.sandbox.archive import MAX_TREE_BYTES, MAX_TREE_FILES, ArchiveError
+from faultline.sandbox.archive import MAX_TREE_BYTES, MAX_TREE_FILES, ArchiveError, read_tar
 from faultline.scenarios import HIDDEN, PERFORMANCE, RESILIENCE, SCENARIOS, run_scenario
 
 _PUBLIC_TIMEOUT_SECONDS = 60
@@ -121,12 +120,21 @@ def failed_integrity(reasons: list[str]) -> VerificationResult:
     )
 
 
-def grade(root: Path, manifest: dict[str, object]) -> VerificationResult:
+def read_submission(workspace: Path | None, archive: Path | None) -> dict[str, bytes]:
+    if archive is not None:
+        return {name: entry.data for name, entry in read_tar(archive.read_bytes()).items()}
+    assert workspace is not None
+    return read_workspace(workspace)
+
+
+def grade(
+    workspace: Path | None, archive: Path | None, manifest: dict[str, object]
+) -> VerificationResult:
     protected = manifest["protected_hashes"]
     expected = manifest["public_tests"]
     assert isinstance(protected, dict) and isinstance(expected, int)
     try:
-        files = read_workspace(root)
+        files = read_submission(workspace, archive)
     except (ArchiveError, OSError) as error:
         return failed_integrity([str(error)])
     found = violations(protected, files)
@@ -151,9 +159,8 @@ def grade(root: Path, manifest: dict[str, object]) -> VerificationResult:
 
 
 def reward(result: VerificationResult) -> float:
-    """Full marks need every check to pass. Partial credit stays below the terminal bonus."""
-    terminal = RewardEngine.TERMINAL_WEIGHT if result.success else 0.0
-    return round(RewardEngine.potential(result) + terminal, 6)
+    """Pass or fail. Broken code already passes much of the suite, so partial credit misleads."""
+    return 1.0 if result.success else 0.0
 
 
 def write_results(result: VerificationResult, directory: Path) -> None:
@@ -186,7 +193,9 @@ def write_results(result: VerificationResult, directory: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workspace", type=Path, default=Path("/app"))
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--workspace", type=Path, help="Directory holding the submission")
+    source.add_argument("--tar", type=Path, help="Tar archive holding the submission")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
@@ -197,7 +206,7 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     args.out.chmod(0o700)
 
-    result = grade(args.workspace, json.loads(args.manifest.read_text()))
+    result = grade(args.workspace, args.tar, json.loads(args.manifest.read_text()))
     write_results(result, args.out)
     print(f"reward {reward(result)}, failures: {list(result.failure_categories) or 'none'}")
     for scenario in result.scenarios:

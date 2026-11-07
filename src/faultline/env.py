@@ -91,11 +91,13 @@ class FaultlineEnv(gym.Env[dict[str, Any], dict[str, Any]]):
         )
         self.observation_space = spaces.Dict(
             {
-                "issue": spaces.Text(max_length=4_096, charset=printable),
-                "last_result": spaces.Text(max_length=MAX_OUTPUT, charset=printable),
-                "visible_test_summary": spaces.Text(max_length=2_000, charset=printable),
-                "service_summary": spaces.Text(max_length=1_000, charset=printable),
-                "diff_summary": spaces.Text(max_length=1_000, charset=printable),
+                "issue": spaces.Text(min_length=0, max_length=4_096, charset=printable),
+                "last_result": spaces.Text(min_length=0, max_length=MAX_OUTPUT, charset=printable),
+                "visible_test_summary": spaces.Text(
+                    min_length=0, max_length=2_000, charset=printable
+                ),
+                "service_summary": spaces.Text(min_length=0, max_length=1_000, charset=printable),
+                "diff_summary": spaces.Text(min_length=0, max_length=1_000, charset=printable),
                 "remaining_steps": spaces.Box(0, 10_000, shape=(), dtype=np.int64),
             }
         )
